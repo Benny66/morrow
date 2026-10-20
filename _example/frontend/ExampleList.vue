@@ -16,7 +16,7 @@ import { onMounted } from 'vue'
 //   两类都会把注释改成语义错误的内容（曾生成出「占位符 <项目名> 由 init.sh
 //   替换成项目名」这种句子），第 2 类还会让注释指向一个不存在的目录。
 //   故上面只写「路径段是模块名占位符」，不写出它本身。
-import { ListExamples } from '../../../bindings/my-notice/app.js'
+import { ListExamples } from '../../../bindings/morrow/app.js'
 import { usePagedList } from '../../composables/usePagedList'
 
 // TODO: 业务逻辑 —— 表单字段、校验、编辑/删除交互。

@@ -24,6 +24,11 @@ type BaseModel struct {
 // 新增模型时在本切片登记；make gen 会通过下方锚点自动注入新模块。
 func AllModels() []interface{} {
 	return []interface{}{
+		// 提醒领域：场景 → 提醒项 → 触发记录 / 打卡记录
+		&Scenario{},
+		&Reminder{},
+		&ReminderFire{},
+		&CheckIn{},
 		// gen:model
 	}
 }

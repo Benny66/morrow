@@ -7,9 +7,11 @@ import { useAppStore } from '../stores/app'
 const store = useAppStore()
 const route = useRoute()
 
-// 侧栏菜单项（占位，后续模块可扩展）
+// 侧栏菜单项（顺序即使用频率：先看今天，再配置，最后是设置）
 const menuItems = [
   { path: '/', label: '仪表盘', icon: '◈' },
+  { path: '/scenarios', label: '场景', icon: '◇' },
+  { path: '/plan', label: '计划', icon: '≡' },
   { path: '/settings', label: '设置', icon: '⚙' },
   // gen:menu
 ]

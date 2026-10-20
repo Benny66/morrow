@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"my-notice/internal/appdir"
+	"morrow/internal/appdir"
 )
 
 // isolateHome 把数据目录重定向到测试临时目录，避免污染真实配置目录。

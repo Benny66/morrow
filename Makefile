@@ -5,6 +5,12 @@
 # 注意可执行名是 wails3（v2 的 CLI 叫 wails），见 go install .../v3/cmd/wails3。
 WAILS := $(shell go env GOPATH)/bin/wails3
 
+# 构建标签：macOS 桌面宠物的透明窗口依赖 WebKit 私有 API（drawsBackground）。
+# 不加它的症状是「窗口配置正确、CSS 也写了 transparent，但屏幕上是一块底色」——
+# 详见 pet_window.go 的 Mac.Backdrop 注释。非 darwin 平台上该 tag 无匹配文件、
+# 无副作用，故统一带上，避免 dev 与打包产物行为不一致（dev 下看不到透明最容易误判）。
+EXTRA_TAGS ?= private_mac_apis
+
 # 项目自身的 Go 包（排除 node_modules 里被 npm 拉进来的 Go 代码，如 flatted）。
 #
 # 刻意用递归展开（=）而非立即展开（:=）：go list 会编译根包，而根包依赖
@@ -13,7 +19,7 @@ WAILS := $(shell go env GOPATH)/bin/wails3
 # 递归展开只在使用到它的 recipe 里求值，那时 require-dist 前置检查已通过。
 GO_PKGS = $(shell go list ./... | grep -v node_modules)
 
-.PHONY: help dev dev-mcp build test lint smoke package gen verify-gen require-dist
+.PHONY: help dev dev-mcp build test lint smoke package install gen icon verify-gen require-dist
 
 help: ## 列出所有命令及用途
 	@echo "可用命令："
@@ -21,7 +27,7 @@ help: ## 列出所有命令及用途
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-12s %s\n", $$1, $$2}'
 
 dev: ## 启动开发态（wails3 dev，含前端热更新）
-	$(WAILS) dev
+	EXTRA_TAGS=$(EXTRA_TAGS) $(WAILS) dev
 
 # AI 基座：带 MCP 服务的开发态。跑起来后应用会在 127.0.0.1:9099 暴露 MCP，
 # Agent 可以 eval 页面 JS、调绑定方法、读 DOM——「改完代码自动验收」靠它。
@@ -40,7 +46,7 @@ dev: ## 启动开发态（wails3 dev，含前端热更新）
 # 该约束由 internal/guard/wiring_test.go 的 TestMCPTagNotInDefaultBuild（源码层）
 # 与 TestMCPNotCompiledIntoDefaultBuild（机制层）、scripts/smoke.sh 第 6 步（产物层）共同强制。
 dev-mcp: ## 启动开发态并打开 MCP 服务（AI 可操作运行中的应用）
-	WAILS_MCP=1 $(WAILS) dev
+	WAILS_MCP=1 EXTRA_TAGS=$(EXTRA_TAGS) $(WAILS) dev
 
 # 走 scripts/build.sh 而非裸 wails build：版本号需同时注入产物（Info.plist /
 # Windows 版本资源）与应用内（app.log / GetAppInfo），后者只能靠 ldflags，
@@ -77,8 +83,19 @@ smoke: ## 冒烟测试（构建 → 启动 → 断言 → 清理）
 package: ## 打包真安装包（make package os=windows|macos|linux [scope=user|machine]）
 	bash scripts/package.sh $(os) $(scope)
 
+# 本地自用的一键安装：绑定 → 前端构建 → 测试 → 静态检查 → 构建 .app → 装进 /Applications。
+# 与 package 的分工：package 出可分发的 dmg（含 Finder 美化布局），install 只解决
+# 「在这台机器上装一个能跑的」，故不碰 dmg 流程。
+install: ## 构建并安装到本机 /Applications
+	bash scripts/install.sh
+
 gen: ## 生成新模块（锚点注入 + 幂等）—— make gen name=<module>
 	bash scripts/gen.sh $(name)
+
+# 图标四处（appicon.png / icons.icns / icon.ico / 托盘内嵌那张）必须同源，
+# 唯一真相是 build/icon/appicon.svg。不挂进 build 的理由见 scripts/gen-icon.sh 头部。
+icon: ## 从 build/icon/appicon.svg 重新生成三平台图标资产
+	bash scripts/gen-icon.sh
 
 verify-gen: ## 生成器端到端验证（临时沙箱：生成 2 个模块 → 编译 → 护栏）
 	bash scripts/verify-gen.sh

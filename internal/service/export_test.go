@@ -9,8 +9,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"my-notice/internal/appdir"
-	"my-notice/internal/apperr"
+	"morrow/internal/appdir"
+	"morrow/internal/apperr"
 )
 
 // exportProbe 仅用于导出测试，非业务模型。

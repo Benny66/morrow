@@ -1,0 +1,29 @@
+classDiagram
+    class Service {
+        +db *gorm.DB
+        +GetTodayStats() *TodayStats
+        +GetPetGrowth() *PetGrowth
+        +ActiveScenario() *Scenario
+        +ListReminders(id uint) []Reminder
+        +completedByReminder(now, today) map
+    }
+    class PetGrowth {
+        +int DoneTotal
+        +int TargetTotal
+        +int Growth
+    }
+    class sumTodayTotals {
+        <<function>>
+        +call(reminders, counts, today) done, target
+    }
+    class growthTier {
+        <<function>>
+        +call(done, target) int
+    }
+    class App {
+        +GetPetGrowth() *PetGrowth
+    }
+    Service --> sumTodayTotals : 复用（唯一求和）
+    Service --> growthTier : 复用（唯一分档）
+    Service --> PetGrowth : 返回
+    App --> Service : 经 svc 调用

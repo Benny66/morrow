@@ -1,9 +1,9 @@
 package service
 
 import (
-	"my-notice/internal/apperr"
-	"my-notice/internal/model"
-	"my-notice/internal/page"
+	"morrow/internal/apperr"
+	"morrow/internal/model"
+	"morrow/internal/page"
 )
 
 // Example 的 CRUD 方法直接挂在 Service 聚合上（数据访问经 s.db）。

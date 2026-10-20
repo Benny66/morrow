@@ -1,0 +1,40 @@
+classDiagram
+    class App {
+        +GetPetGrowth() *service.PetGrowth
+        +GetTodayStats() *service.TodayStats
+        +CompleteReminder(fireID uint) error
+    }
+    class Service {
+        +GetPetGrowth() *PetGrowth
+        +GetTodayStats() *TodayStats
+        +CompleteReminder(fireID uint) error
+        -activeProgress(now, today) (scenario, reminders, counts, doneTotal, targetTotal, err)
+        -completedByReminder(now, today) map
+        -growthTier(done, target) int
+    }
+    class PetGrowth {
+        <<struct>>
+        +int DoneTotal
+        +int TargetTotal
+        +int Growth
+    }
+    class TodayStats {
+        <<struct>>
+        +string DateKey
+        +int DoneTotal
+        +int TargetTotal
+    }
+    class GrowthTier {
+        <<enumeration>>
+        GrowthSprout = 0
+        GrowthLevel1 = 1
+        GrowthLevel2 = 2
+        GrowthLevel3 = 3
+        GrowthBloomed = 4
+    }
+    App --> Service : 委托 svc（不 import gorm/database）
+    Service --> PetGrowth : 返回
+    Service --> TodayStats : 返回
+    Service --> GrowthTier : growthTier 计算档位
+    Service ..> PetGrowth : activeProgress 共享 DoneTotal/TargetTotal
+    Service ..> TodayStats : activeProgress 共享 DoneTotal/TargetTotal

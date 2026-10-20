@@ -140,7 +140,11 @@ echo "✓ 应用内版本 = ${VERSION}（app.log 已确认）"
 # 【为什么这些名字是可靠判据】它们只在 mcp_enabled.go 里作为字符串常量存在
 # （`os.Getenv(mcpHostEnvVar)`，且常量值就是这些字面量），未启用时不会进产物。
 # application.go 里虽然也出现这几个名字，但那处只是注释，不参与编译。
-MCP_MARKERS="WAILS_MCP_HOST WAILS_MCP_TOKEN WAILS_MCP_PORT WAILS_MCP_TIMEOUT WAILS_MCP_HIDE_CURSOR"
+#
+# 【为什么不能把 WAILS_MCP_TOKEN 算进判据】本仓 main.go 在配置了 MCPToken 时会
+# 主动 os.Setenv("WAILS_MCP_TOKEN", …) 透传给上游 MCP 服务——这个字面量因此会
+# 【合法地】出现在默认构建里。它是 app 侧接线，不是 MCP 能力被编入的证据。
+MCP_MARKERS="WAILS_MCP_HOST WAILS_MCP_PORT WAILS_MCP_TIMEOUT WAILS_MCP_HIDE_CURSOR"
 MCP_MARKER_RE="$(echo "$MCP_MARKERS" | tr ' ' '|')"
 
 if ! command -v strings >/dev/null 2>&1; then

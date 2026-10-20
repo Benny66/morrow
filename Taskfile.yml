@@ -20,12 +20,12 @@
 version: '3'
 
 vars:
-  APP_NAME: "my-notice"
+  APP_NAME: "Morrow"
   BIN_DIR: "build/bin"
 
   # Go module 路径（版本注入的 ldflags 需要拼出 -X <module>/internal/appinfo.*）。
   # 与 go.mod 的 module 行保持一致；由 wiring_test 核对两处不漂移。
-  MODULE: "my-notice"
+  MODULE: "morrow"
 
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'

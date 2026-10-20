@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小满 · Morrow 内置宠物形象</title>
+<style>
+  /* 令牌与 frontend/src/styles/tokens.css 同源（这里展开成静态值，因为这是独立文档页） */
+  :root {
+    --color-primary: #5b8def;
+    --color-primary-50:  color-mix(in oklab, var(--color-primary) 8%, white);
+    --color-primary-100: color-mix(in oklab, var(--color-primary) 20%, white);
+    --color-primary-300: color-mix(in oklab, var(--color-primary) 52%, white);
+    --color-primary-900: color-mix(in oklab, var(--color-primary) 32%, black);
+    --color-success: #30a46c;
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+    --bg: #0e0f12;
+    --panel: #16181d;
+    --line: #262a32;
+    --text-1: #e6e8eb;
+    --text-2: #9ba1aa;
+    --text-3: #5c6370;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 24px 72px;
+    background: var(--bg); color: var(--text-1);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+  .sub { margin: 0; color: var(--text-2); font-size: 13px; }
+  h2 {
+    margin: 40px 0 14px; font-size: 12px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2);
+  }
+
+  .hero { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; margin-top: 26px; }
+  .stage {
+    width: 300px; height: 324px; flex: none;
+    display: grid; place-items: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  }
+  .facts { flex: 1; min-width: 260px; }
+  .facts dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; font-size: 13px; }
+  .facts dt { color: var(--text-2); white-space: nowrap; }
+  .facts dd { margin: 0; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; }
+
+  .states { display: flex; gap: 12px; flex-wrap: wrap; }
+  .cell {
+    width: 178px; padding: 12px 8px 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .cell .art { width: 168px; height: 182px; display: grid; place-items: end center; }
+  .cell .name { font-size: 12px; font-weight: 600; }
+  .cell .note { font-size: 11px; color: var(--text-3); text-align: center; line-height: 1.45; }
+
+  .ladder { display: flex; align-items: flex-end; gap: 24px; padding: 18px 22px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .ladder .light { background: #f2f3f5; border-radius: 10px; padding: 12px 16px; display: flex; align-items: flex-end; gap: 22px; }
+  .ladder figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .ladder figcaption { font-size: 10px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .ladder .light figcaption { color: #6b7280; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--text-2); font-weight: 500; font-size: 12px; }
+  td code { font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; color: var(--text-2); }
+  .warn { margin-top: 18px; padding: 12px 14px; border-radius: 10px; font-size: 12px;
+    color: var(--text-2); background: rgba(255,255,255,.03); border: 1px dashed var(--line); }
+
+  /* ==========================================================================
+     角色样式：与 frontend/src/views/Pet.vue 的 .pet__* 规则逐条对应
+     ========================================================================== */
+  .pet-avatar { width: 100%; height: 100%; display: block; transform-origin: 50% 100%;
+    animation: pet-breathe 3.4s var(--ease-in-out) infinite; }
+  .pet-avatar.big { width: 264px; height: 286px; }
+
+  .pet__shadow { fill: var(--color-primary-900); opacity: 0.18; }
+  .pet__body { fill: var(--color-primary); }
+  .pet__sheen { fill: var(--color-primary-50); opacity: 0.55; }
+  .pet__cheek { fill: var(--color-primary-300); opacity: 0.7; }
+  .pet__eye { fill: var(--color-primary-900); }
+  .pet__mouth { fill: none; stroke: var(--color-primary-900); stroke-width: 3.5; stroke-linecap: round; }
+  .pet__arm line { stroke: var(--color-primary); stroke-width: 16; stroke-linecap: round; }
+  .pet__arm--right { transform-box: fill-box; transform-origin: 0% 0%; }
+  .pet__stem { fill: none; stroke: var(--color-success); stroke-width: 5; stroke-linecap: round; }
+  .pet__leaf { fill: var(--color-success); }
+  .pet__sprout { transform-box: fill-box; transform-origin: 50% 100%;
+    animation: pet-sprout-sway 3.8s var(--ease-in-out) infinite; }
+  .pet__eyes-open { transform-box: fill-box; transform-origin: center;
+    animation: pet-blink 4.6s steps(1, end) infinite; }
+  .pet__eyes-happy { opacity: 0; }
+  .pet__eyes-happy path { fill: none; stroke: var(--color-primary-900); stroke-width: 4.5; stroke-linecap: round; }
+
+  .pet--waiting .pet-avatar { animation-duration: 1.5s; }
+  .pet--waiting .pet__sprout { animation: pet-sprout-alert 800ms var(--ease-in-out) infinite; }
+  .pet--waving .pet-avatar { animation: pet-wave 450ms var(--ease-in-out) 2; }
+  .pet--waving .pet__arm--right { animation: pet-arm-wave 450ms var(--ease-in-out) 2; }
+  .pet--jumping .pet-avatar { animation: pet-jump 520ms var(--ease-in-out) infinite; }
+  .pet--jumping .pet__sprout { animation: pet-sprout-pop 520ms var(--ease-in-out) infinite; }
+  .pet--waving .pet__eyes-open, .pet--jumping .pet__eyes-open { opacity: 0; }
+  .pet--waving .pet__eyes-happy, .pet--jumping .pet__eyes-happy { opacity: 1; }
+
+  @keyframes pet-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.03, 0.97); } }
+  @keyframes pet-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.12); } }
+  @keyframes pet-wave { 0%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-5deg); } 75% { transform: rotate(5deg); } }
+  @keyframes pet-jump { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-8%); } }
+  @keyframes pet-sprout-sway { 0%, 100% { transform: rotate(-2.5deg); } 50% { transform: rotate(2.5deg); } }
+  @keyframes pet-sprout-alert { 0%, 100% { transform: rotate(0deg) scaleY(1.08); } 50% { transform: rotate(6deg) scaleY(1.08); } }
+  @keyframes pet-sprout-pop { 0%, 100% { transform: rotate(-10deg) scaleY(1.1); } 50% { transform: rotate(10deg) scaleY(1.1); } }
+  @keyframes pet-arm-wave { 0%, 100% { transform: rotate(0deg); } 35% { transform: rotate(-58deg); } 65% { transform: rotate(-24deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>小满</h1>
+    <p class="sub">Morrow 内置宠物形象 · 一滴会走路的水，头顶长着一株芽</p>
+  </header>
+
+  <div class="hero">
+    <div class="stage">
+      <svg class="pet-avatar big" viewBox="0 0 192 208" role="img" aria-label="小满">
+        <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+        <g>
+          <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+          <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+          <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+          <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+          <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+          <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+          <g class="pet__eyes">
+            <g class="pet__eyes-open">
+              <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+              <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+            </g>
+            <g class="pet__eyes-happy">
+              <path d="M63 118q11-13 22 0" />
+              <path d="M107 118q11-13 22 0" />
+            </g>
+          </g>
+          <path class="pet__mouth" d="M88 140q8 8 16 0" />
+          <g class="pet__sprout">
+            <path class="pet__stem" d="M96 46V20" />
+            <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+            <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+          </g>
+        </g>
+      </svg>
+    </div>
+
+    <div class="facts">
+      <dl>
+        <dt>身份</dt><dd>提醒的化身：它靠"被照顾"活着，所以它懂你为什么需要提醒</dd>
+        <dt>性格</dt><dd>不多话。你处理完提醒，它会跳一下；没处理，它就站那儿看着你</dd>
+        <dt>构成</dt><dd>水滴身 + 嫩芽 + 两只短手；无描边，靠色块与高光分层</dd>
+        <dt>画板</dt><dd>192 × 208（与图集单帧一致，切 sprite 不跳尺寸）</dd>
+        <dt>身体</dt><dd><i class="dot" style="background:#5b8def"></i>--color-primary</dd>
+        <dt>芽</dt><dd><i class="dot" style="background:#30a46c"></i>--color-success（健康 / 成长）</dd>
+        <dt>高光</dt><dd><i class="dot" style="background:#eaf0fd"></i>--color-primary-50 @ 55%</dd>
+      </dl>
+    </div>
+  </div>
+
+  <h2>四种状态</h2>
+  <div class="states">
+    <div class="cell pet--idle">
+      <div class="art">
+        <svg class="pet-avatar" viewBox="0 0 192 208"><g>
+          <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+          <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+          <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+          <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+          <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+          <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+          <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+          <g class="pet__eyes"><g class="pet__eyes-open">
+            <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+            <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+          </g><g class="pet__eyes-happy">
+            <path d="M63 118q11-13 22 0" /><path d="M107 118q11-13 22 0" />
+          </g></g>
+          <path class="pet__mouth" d="M88 140q8 8 16 0" />
+          <g class="pet__sprout">
+            <path class="pet__stem" d="M96 46V20" />
+            <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+            <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+          </g>
+        </g></svg>
+      </div>
+      <span class="name">待机 idle</span>
+      <span class="note">呼吸 3.4s，芽轻摇，偶尔眨眼</span>
+    </div>
+
+    <div class="cell pet--waiting">
+      <div class="art">
+        <svg class="pet-avatar" viewBox="0 0 192 208"><g>
+          <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+          <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+          <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+          <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+          <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+          <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+          <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+          <g class="pet__eyes"><g class="pet__eyes-open">
+            <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+            <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+          </g><g class="pet__eyes-happy">
+            <path d="M63 118q11-13 22 0" /><path d="M107 118q11-13 22 0" />
+          </g></g>
+          <path class="pet__mouth" d="M88 140q8 8 16 0" />
+          <g class="pet__sprout">
+            <path class="pet__stem" d="M96 46V20" />
+            <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+            <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+          </g>
+        </g></svg>
+      </div>
+      <span class="name">等待处理 waiting</span>
+      <span class="note">呼吸提速到 1.5s，芽立起并小幅抖动</span>
+    </div>
+
+    <div class="cell pet--waving">
+      <div class="art">
+        <svg class="pet-avatar" viewBox="0 0 192 208"><g>
+          <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+          <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+          <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+          <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+          <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+          <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+          <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+          <g class="pet__eyes"><g class="pet__eyes-open">
+            <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+            <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+          </g><g class="pet__eyes-happy">
+            <path d="M63 118q11-13 22 0" /><path d="M107 118q11-13 22 0" />
+          </g></g>
+          <path class="pet__mouth" d="M88 140q8 8 16 0" />
+          <g class="pet__sprout">
+            <path class="pet__stem" d="M96 46V20" />
+            <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+            <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+          </g>
+        </g></svg>
+      </div>
+      <span class="name">挥手 waving</span>
+      <span class="note">整身摇摆 + 右手抬起招手两下，眼睛变弯</span>
+    </div>
+
+    <div class="cell pet--jumping">
+      <div class="art">
+        <svg class="pet-avatar" viewBox="0 0 192 208"><g>
+          <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+          <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+          <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+          <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+          <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+          <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+          <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+          <g class="pet__eyes"><g class="pet__eyes-open">
+            <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+            <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+          </g><g class="pet__eyes-happy">
+            <path d="M63 118q11-13 22 0" /><path d="M107 118q11-13 22 0" />
+          </g></g>
+          <path class="pet__mouth" d="M88 140q8 8 16 0" />
+          <g class="pet__sprout">
+            <path class="pet__stem" d="M96 46V20" />
+            <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+            <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+          </g>
+        </g></svg>
+      </div>
+      <span class="name">庆祝 jumping</span>
+      <span class="note">起跳 + 芽大幅甩动，眼睛变弯</span>
+    </div>
+  </div>
+
+  <h2>尺寸（实际渲染像素）</h2>
+  <div class="ladder">
+    <div class="light">
+      <figure><svg class="pet-avatar" width="96" height="104" viewBox="0 0 192 208"><g>
+        <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+        <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+        <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+        <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+        <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+        <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+        <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+        <g class="pet__eyes"><g class="pet__eyes-open">
+          <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+          <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+        </g></g>
+        <path class="pet__mouth" d="M88 140q8 8 16 0" />
+        <g class="pet__sprout">
+          <path class="pet__stem" d="M96 46V20" />
+          <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+          <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+        </g></g></svg>
+        <figcaption>0.5× 96px · 浅色桌面</figcaption>
+      </figure>
+    </div>
+    <figure><svg class="pet-avatar" width="192" height="208" viewBox="0 0 192 208"><g>
+      <ellipse class="pet__shadow" cx="96" cy="194" rx="46" ry="7" />
+      <g class="pet__arm pet__arm--left"><line x1="50" y1="150" x2="36" y2="160" /></g>
+      <g class="pet__arm pet__arm--right"><line x1="142" y1="150" x2="156" y2="160" /></g>
+      <path class="pet__body" d="M96 40C118 68 154 98 154 132A58 58 0 0 1 38 132C38 98 74 68 96 40Z" />
+      <ellipse class="pet__sheen" cx="72" cy="96" rx="11" ry="19" transform="rotate(-20 72 96)" />
+      <ellipse class="pet__cheek" cx="58" cy="132" rx="11" ry="6.5" />
+      <ellipse class="pet__cheek" cx="134" cy="132" rx="11" ry="6.5" />
+      <g class="pet__eyes"><g class="pet__eyes-open">
+        <ellipse class="pet__eye" cx="74" cy="116" rx="8.5" ry="10.5" />
+        <ellipse class="pet__eye" cx="118" cy="116" rx="8.5" ry="10.5" />
+      </g></g>
+      <path class="pet__mouth" d="M88 140q8 8 16 0" />
+      <g class="pet__sprout">
+        <path class="pet__stem" d="M96 46V20" />
+        <path class="pet__leaf" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+        <path class="pet__leaf" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+      </g></g></svg>
+      <figcaption>1.0× 192px · 默认</figcaption>
+    </figure>
+  </div>
+
+  <h2>规格</h2>
+  <table>
+    <tr><th>项</th><th>值</th><th>说明</th></tr>
+    <tr><td>画板</td><td><code>192 × 208</code></td><td>与图集单帧一致，sprite / builtin 互切不跳尺寸</td></tr>
+    <tr><td>身体</td><td><code>116 × 150</code></td><td>水滴：(96,40) 顶点 → 最宽 y=132 → 底 y=190</td></tr>
+    <tr><td>眼距 / 眼高</td><td><code>44 / y=116</code></td><td>眼心距 44，位于身体中线略上</td></tr>
+    <tr><td>芽</td><td><code>y 8–46</code></td><td>头顶，两片叶；情绪主要靠它表达</td></tr>
+    <tr><td>落地影</td><td><code>cx96 cy194</code></td><td>透明度 0.18，用 primary-900</td></tr>
+    <tr><td>缩放</td><td><code>0.5× – 2.0×</code></td><td>96px 下仍可辨：只剩剪影 + 两片绿</td></tr>
+  </table>
+
+  <p class="warn">
+    本页是设计快照，用于评审与对照；<strong>实现以 <code>frontend/src/views/Pet.vue</code> 为准</strong>。
+    改角色请改那边，本页不参与运行。挥手动画在生产里只播两轮（900ms），这里会停住，属正常。
+  </p>
+</div>
+</body>
+</html>

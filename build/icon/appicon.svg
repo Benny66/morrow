@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Morrow">
+  <!--
+    Morrow 应用图标 / 1024 画板
+    ==================================================================
+    画板规则：Apple 图标模板 —— 1024 画布，824 内容区（四边各留 100），
+    圆角 185（≈22.4%），与 macOS Big Sur 起的 Dock 视觉一致。
+    只画"图标本身"，不加外投影；系统会自己加。
+    主题：暗色优先。深蓝灰卡面承接暗色 Dock，白色铃铛保证 16px 仍可辨识，
+    品牌蓝 #5b8def 只用在"未读点"上——它是全图唯一的彩色，用作语义锚点。
+
+    注意：本文件按 XML 解析（独立 .svg 不做 HTML 容错），注释里不能出现连续的
+    两个短横线——那会让整个文件解析失败、渲染出空白图，且没有任何报错。
+  -->
+  <defs>
+    <linearGradient id="mn-surface" x1="0" y1="0" x2="0.22" y2="1">
+      <stop offset="0" stop-color="#2F3748"/>
+      <stop offset="0.55" stop-color="#1B2130"/>
+      <stop offset="1" stop-color="#10141B"/>
+    </linearGradient>
+    <linearGradient id="mn-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mn-bell" x1="0.2" y1="0.05" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#F1F4FA"/>
+      <stop offset="1" stop-color="#C8D3E4"/>
+    </linearGradient>
+    <linearGradient id="mn-badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#84A9F7"/>
+      <stop offset="1" stop-color="#4A73D6"/>
+    </linearGradient>
+    <clipPath id="mn-card">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+    <mask id="mn-cut">
+      <rect width="1024" height="1024" fill="#FFFFFF"/>
+      <circle cx="655" cy="330" r="84" fill="#000000"/>
+    </mask>
+  </defs>
+
+  <!-- 卡面 -->
+  <g clip-path="url(#mn-card)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#mn-surface)"/>
+    <rect x="100" y="100" width="824" height="511" fill="url(#mn-sheen)"/>
+  </g>
+  <!-- 内描边：让深色卡面在深色坞里仍有轮廓（内缩 2px，避免外扩） -->
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="4"/>
+
+  <!-- 铃铛（实心剪影，不依赖细线；未读点处挖空，形成徽标间隙） -->
+  <g mask="url(#mn-cut)">
+    <g transform="translate(164 112.7) scale(28)">
+      <path fill="url(#mn-bell)" d="M5.8 11.6A6.2 6.2 0 0 1 18.2 11.6C18.2 15.2 18.9 16.9 20.4 18.4H3.6C5.1 16.9 5.8 15.2 5.8 11.6Z"/>
+      <circle cx="12" cy="21.05" r="1.5" fill="url(#mn-bell)"/>
+    </g>
+  </g>
+
+  <!-- 未读点：全图唯一彩色，品牌主色 -->
+  <circle cx="655" cy="330" r="66" fill="url(#mn-badge)"/>
+</svg>

@@ -31,6 +31,14 @@ const themeStart = performance.now()
 await useAppStore(pinia).initTheme()
 const themeMs = performance.now() - themeStart
 
+// 等首次导航解析完再挂载。
+//
+// 【为什么必须等】挂载那一刻 route 还是 START_LOCATION（path='/', meta={}），
+// 而宠物窗口的 URL 是 /#/pet、靠 meta.bare 跳过 AppShell（见 App.vue）。
+// 不等的话首帧按 '/' 渲染——一个 240×360 的透明小窗里会先闪出一整屏深色 AppShell，
+// 再切到宠物页。主窗看不出差别，宠物窗口上却是一块明显的黑方块。
+await router.isReady()
+
 const mountStart = performance.now()
 app.mount('#app')
 const mountMs = performance.now() - mountStart

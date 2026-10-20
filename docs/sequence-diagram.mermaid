@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    participant Pet as Pet.vue（webview）
+    participant App as App（app.go）
+    participant Svc as service.Service
+    participant DB as SQLite
+
+    Note over Pet: 挂载时 & 每 4s 轮询（沿用 PET_SETTINGS_POLL_MS）
+    Pet->>App: GetPetGrowth()
+    App->>Svc: GetPetGrowth()
+    Svc->>Svc: activeProgress(now, today)（与 GetTodayStats 共用）
+    Svc->>DB: ActiveScenario / ListReminders / completedByReminder
+    DB-->>Svc: 启用提醒 + 今日完成数
+    Svc->>Svc: growthTier(done, target)
+    Svc-->>App: PetGrowth{done_total, target_total, growth}
+    App-->>Pet: PetGrowth
+    Pet->>Pet: growth → class pet--growth-N
+
+    Note over Pet: 用户在气泡点「完成」
+    Pet->>App: CompleteReminder(fireID)
+    App->>Svc: CompleteReminder(fireID)
+    Svc->>DB: 事务：落终态 + 追加 CheckIn
+    App-->>Pet: ok
+    App-->>Pet: Emit reminder:changed(reason=check_in)
+    Pet->>Pet: refreshPending() + refreshGrowth()
+    Pet->>App: GetPetGrowth()
+    App-->>Pet: PetGrowth（新档位，可能跨到 4）
+
+    Note over Pet: 次日凌晨翻篇（无事件）
+    Pet->>App: GetPetGrowth()（下一轮 4s 轮询）
+    App-->>Pet: PetGrowth{growth: 0}（date_key 自然归零）

@@ -45,6 +45,12 @@ export const EventAction = {
   Done: 'done',
   /** 失败结束。 */
   Error: 'error',
+  /** 提醒已送达（domain 为 reminder）。 */
+  Fired: 'fired',
+  /** 数据变更，前端应重新拉取。 */
+  Changed: 'changed',
+  /** 桌面宠物贴边收起 / 展开（domain 为 pet）。 */
+  Dock: 'dock',
 } as const
 
 /** 事件动作取值。 */

@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=my-notice
-Comment=my-notice desktop application
+Name=Morrow
+Comment=Morrow — desktop reminders and habits
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/my-notice %u
+Exec=/usr/local/bin/Morrow %u
 Terminal=false
 Type=Application
-Icon=my-notice
+Icon=Morrow
 Categories=Utility;
-StartupWMClass=my-notice
+StartupWMClass=Morrow
 
  

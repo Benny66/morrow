@@ -1,4 +1,4 @@
-module my-notice
+module morrow
 
 go 1.25.0
 

@@ -13,12 +13,12 @@ import (
 	logservice "github.com/wailsapp/wails/v3/pkg/services/log"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
-	"my-notice/internal/apperr"
-	"my-notice/internal/appinfo"
-	"my-notice/internal/config"
-	"my-notice/internal/database"
-	"my-notice/internal/logging"
-	"my-notice/internal/service"
+	"morrow/internal/apperr"
+	"morrow/internal/appinfo"
+	"morrow/internal/config"
+	"morrow/internal/database"
+	"morrow/internal/logging"
+	"morrow/internal/service"
 )
 
 //go:embed all:frontend/dist
@@ -27,8 +27,8 @@ var assets embed.FS
 //go:embed build/appicon.png
 var trayIconBytes []byte
 
-// appName 应用标识，用于定位用户配置目录下的数据文件与日志。
-const appName = "my-notice"
+// appName 应用名，用于窗口标题与用户配置目录下的数据文件、日志定位。
+const appName = "Morrow"
 
 // bootTimer 记录组合根各阶段的耗时，输出启动时间线的 Go 侧半段。
 //
@@ -240,8 +240,70 @@ func main() {
 		},
 	})
 
-	// macOS：挂应用菜单（AppMenu + EditMenu role）。
+	// ---- 第 2b 段：建宠物窗口（透明置顶小窗）----
 	//
+	// 与主窗【并列】创建，而不是在主窗里开一个子窗口：
+	//   - 它要浮在别的应用之上（AlwaysOnTop），是一个独立的顶层窗口；
+	//   - 它隐藏/显示与主窗完全解耦（关掉宠物不影响主窗，反之亦然）。
+	//
+	// URL 用 hash 路由指向 /#/pet：与主窗共用同一份前端产物（assets 已整体嵌入），
+	// 该路由的 meta.bare 让 App.vue 跳过 AppShell——否则宠物窗口里会画出侧栏与标题栏。
+	//
+	// 建窗参数集中在 pet_window.go 的 petWindowOptions 里（透明/置顶/位置/尺寸换算
+	// 互相咬合，放一处才不会各写一套）。
+	petWin := wailsApp.Window.NewWithOptions(petWindowOptions(cfg))
+	// 位置单独设置：建窗参数里的 X/Y 是【相对屏幕】的坐标，而 Position()/SetPosition()
+	// 用全局坐标。混用会让多屏用户每次启动都被拽回主屏（详见 petRestorePosition）。
+	if petWin != nil {
+		px, py := petRestorePosition(wailsApp, cfg)
+		petWin.SetPosition(px, py)
+	}
+
+	// ---- 第 2c 段：建全屏强提醒窗口（透明覆盖层，启动即隐藏）----
+	//
+	// 与宠物窗口并列的第三个窗口，理由同样是"独立的顶层窗口"：它要铺满整块屏幕并浮在
+	// 所有窗口之上，做成主窗的子窗口既盖不住别的应用，也会被主窗的显隐牵连。
+	//
+	// 【尺寸与位置分开给】建窗参数里的 Width/Height 只是首帧尺寸，几何的唯一真相是
+	// alertGeometry（主屏 WorkArea）。位置必须用 SetPosition 设全局坐标——建窗参数的
+	// X/Y 是"相对屏幕"的坐标，混用会让多屏用户每次到点都盖错屏幕。
+	//
+	// 【Hidden: true 在建窗参数里】不是创建后再 Hide（那会先闪一下全屏遮罩）。
+	// 何时显示由前端按"有没有待处理提醒"决定，见 Alert.vue 的状态机说明。
+	alertX, alertY, alertW, alertH := alertGeometry(wailsApp)
+	alertWin := wailsApp.Window.NewWithOptions(alertWindowOptions(alertW, alertH))
+	if alertWin != nil {
+		alertWin.SetSize(alertW, alertH)
+		alertWin.SetPosition(alertX, alertY)
+	}
+	// 【它的 WindowClosing 钩子不在这里注册】必须排在主窗那条钩子【之后】，
+	// 理由见下方 alert 钩子处的注释（护栏只解析 main.go 里第一个钩子）。
+
+	// 强提醒的 Go 侧兜底：引擎每次 emit reminder:fired 时，也把 alert 窗口推出来一次。
+	//
+	// 【为什么不能只靠前端】整条链路的触发是「隐藏的 alert 窗口前端收到事件 → 自己
+	// 判断 → 调 ShowAlert()」，后端从不主动推窗口。而 WKWebView 对 ordered-out 的
+	// 窗口会降优先级、可能节流甚至挂起页面——一旦那一页被挂起，遮罩永远不出现，
+	// 且没有任何日志（本仓最忌讳的"没有症状的失效"）。
+	//
+	// 【职责边界】这里只保证"窗出来"：不判断有没有待处理、不渲染内容、不调 Focus()。
+	// 内容由前端渲染（那一页恢复可见时会在 visibilitychange 上自己 syncVisibility），
+	// 有没有待处理也由前端判断；抢焦点比晚出现半秒更讨厌（用户可能正在别处打字）。
+	// 用 GetByName 而不是调 App 的绑定方法：绑定层一行都不动（护栏 3 要复算方法 ID）。
+	//
+	// 【关于并发】这里读 cfg.StrongAlertEnabled 不加锁，与设置页的写入没有互斥——
+	// 与本仓其它 cfg 字段（如负责开关宠物的 PetVisible）的既有取舍一致：
+	// 单个 bool 不会撕裂读，最坏是晚一个 tick 才反映新值，不影响正确性。
+	alertShowHook = func() {
+		if !cfg.StrongAlertEnabled {
+			return
+		}
+		if w, ok := wailsApp.Window.GetByName(alertWindowName); ok && w != nil {
+			w.Show()
+		}
+	}
+
+	// macOS：挂应用菜单（AppMenu + EditMenu role）。
 	// 为什么必须挂：webview 里的 <input>/<textarea> 快捷键（Cmd+C/V/X/A/Z）不是
 	// webview 自带的，而是由响应链上的应用菜单承接——不挂菜单，输入框的复制粘贴
 	// 全军覆没。EditMenu role 由框架展开为标准编辑项（撤销/重做/剪切/复制/粘贴/
@@ -290,6 +352,25 @@ func main() {
 		e.Cancel()
 		wailsApp.Quit()
 	})
+
+	// 强提醒窗口的关窗拦截。
+	//
+	// 【为什么拦】全屏遮罩看起来就是个对话框，用户按 Cmd+W / 关窗快捷键是自然反应。
+	// 不拦的话框架会【销毁】这个窗口——而它只在启动时创建一次，此后到点再没有
+	// 任何入口能把它显示回来（ShowAlert 只会拿到 nil 并回报 not_found）。
+	// 故与主窗同一套取舍：拦下销毁，改为隐藏（父级理由见上方主窗钩子的长注释）。
+	//
+	// 【为什么必须排主窗钩子之后】internal/guard/wiring_test.go 的护栏 19/20 只解析
+	// main.go 里**第一个** WindowClosing 钩子来验证关窗决策（托盘在→隐藏、托盘缺失→
+	// 退出）。alert 的钩子是无条件隐藏、与托盘无关，排在前面会把主窗那条挤出去、
+	// 让护栏误判（护栏 20 会直接变红）。顺序即契约，不要为了"就近创建"把它挪回建窗旁边。
+	if alertWin != nil {
+		alertWin.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			alertWin.Hide()
+			e.Cancel()
+			slog.Info("强提醒窗口被请求关闭，已改为隐藏")
+		})
+	}
 
 	// macOS 点 Dock 图标恢复窗口（四条恢复路径之一）。
 	//

@@ -5,19 +5,19 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "my-notice"
+    !define INFO_PROJECTNAME "Morrow"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "my-notice"
+    !define INFO_COMPANYNAME "bennywen"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "my-notice"
+    !define INFO_PRODUCTNAME "Morrow"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "1.0.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "Copyright © 2026 my-notice"
+    !define INFO_COPYRIGHT "Copyright © 2026 bennywen"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"

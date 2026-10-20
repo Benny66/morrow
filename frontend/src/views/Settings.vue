@@ -6,23 +6,32 @@ import { useAppStore } from '../stores/app'
 import {
   Confirm,
   ExportDatabase,
+  GetAISettings,
   GetAppInfo,
   GetAutostartEnabled,
   GetClipboardText,
   GetDataDir,
   GetMCPToken,
+  GetPetSettings,
+  GetReminderSettings,
   GetToggleWindowShortcut,
   ImportDatabase,
+  ImportPetPack,
+  ListPetPacks,
   OpenDataDir,
   RequestNotificationPermission,
   RotateMCPToken,
   SelectFile,
   SelectSaveFile,
   SendNotification,
+  SetAISettings,
   SetAutostart,
   SetClipboardText,
+  SetPetSettings,
+  SetReminderSettings,
   SetToggleWindowShortcut,
-} from '../../bindings/my-notice/app.js'
+  TestAIConnection,
+} from '../../bindings/morrow/app.js'
 import { invoke, type AppError } from '../lib/invoke'
 import { logError, logInfo } from '../lib/log'
 
@@ -49,6 +58,42 @@ const shortcutHint = ref('')
 const mcpTokenSet = ref(false)
 const mcpHint = ref('')
 const importHint = ref('')
+
+// ---- AI 连接配置 ----
+// 密钥走「写只写、读脱敏」：读取路径永远拿不到明文（见 ai.PublicSettings），
+// 故输入框只用于"重新填写"，留空即保持原值不变。
+type AIPublic = Awaited<ReturnType<typeof GetAISettings>>
+const aiPublic = ref<AIPublic | null>(null)
+const aiBaseURL = ref('')
+const aiModel = ref('')
+const aiAPIKey = ref('')
+const aiHint = ref('')
+const aiSaving = ref(false)
+const aiTesting = ref(false)
+
+// ---- 提醒行为 ----
+// 用四个独立 ref 而不是一个可空对象：模板里 v-model 绑定到 `x.y` 时，
+// x 为 null 会让 vue-tsc 直接报"可能为 null"，拆开就没有这个问题。
+const quietStart = ref('22:00')
+const quietEnd = ref('08:00')
+const snoozeMinutes = ref(5)
+const notifyEnabled = ref(true)
+// 全屏强提醒：属于【提醒设置】（到点怎么提醒），不是宠物设置。
+// 之所以不用 @change 立即保存：它与上面的静默时段/推迟分钟同属一组，
+// 一起点「保存提醒设置」提交，避免"改一半就已经生效"。
+const strongAlertEnabled = ref(true)
+const reminderHint = ref('')
+const reminderSaving = ref(false)
+
+// ---- 桌面宠物 ----
+// 宠物包列表用绑定返回类型反推，不手写镜像（Go 侧字段一改这里立刻跟着变）。
+type PetPack = NonNullable<Awaited<ReturnType<typeof ListPetPacks>>>[number]
+const petPacks = ref<PetPack[]>([])
+const petVisible = ref(true)
+const petScale = ref(1)
+const petPackID = ref('builtin')
+const petHint = ref('')
+const petImporting = ref(false)
 
 /** 默认导出文件名：带日期，避免用户多次导出互相覆盖。 */
 function defaultBackupName(): string {
@@ -188,6 +233,181 @@ async function openDataDir() {
   }
 }
 
+// ---- AI 连接配置 ----
+// 密钥是「写只写、读脱敏」：读取路径永远拿不到明文（见 ai.PublicSettings），
+// 故输入框只用于重新填写，留空即保持原值不变（见 config.SaveAISettings）。
+
+/** 读取 AI 配置并回显（密钥回显为脱敏串，输入框留空）。 */
+async function refreshAISettings() {
+  try {
+    aiPublic.value = await invoke(() => GetAISettings(), 'GetAISettings')
+    aiBaseURL.value = aiPublic.value?.base_url ?? ''
+    aiModel.value = aiPublic.value?.model ?? ''
+    aiAPIKey.value = ''
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+}
+
+/** 保存 AI 配置。 */
+async function saveAISettings() {
+  actionError.value = null
+  aiHint.value = ''
+  aiSaving.value = true
+  try {
+    await invoke(
+      () => SetAISettings(aiBaseURL.value.trim(), aiModel.value.trim(), aiAPIKey.value.trim()),
+      'SetAISettings',
+    )
+    aiHint.value = '已保存'
+    logInfo('AI 配置已保存', { model: aiModel.value.trim() })
+    await refreshAISettings()
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    aiSaving.value = false
+  }
+}
+
+/** 测试连接：先落盘再试连，避免"测的是旧配置"这种误导。 */
+async function testAIConnection() {
+  actionError.value = null
+  aiHint.value = ''
+  aiTesting.value = true
+  try {
+    await invoke(
+      () => SetAISettings(aiBaseURL.value.trim(), aiModel.value.trim(), aiAPIKey.value.trim()),
+      'SetAISettings',
+    )
+    aiHint.value = await invoke(() => TestAIConnection(), 'TestAIConnection')
+    await refreshAISettings()
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    aiTesting.value = false
+  }
+}
+
+// ---- 提醒行为 ----
+
+/** 读取提醒行为设置。 */
+async function refreshReminderSettings() {
+  try {
+    const current = await invoke(() => GetReminderSettings(), 'GetReminderSettings')
+    quietStart.value = current.quiet_start
+    quietEnd.value = current.quiet_end
+    snoozeMinutes.value = current.snooze_minutes
+    notifyEnabled.value = current.notify_enabled
+    strongAlertEnabled.value = current.strong_alert_enabled
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+}
+
+/** 保存提醒行为设置（静默时段格式由后端校验）。 */
+async function saveReminderSettings() {
+  actionError.value = null
+  reminderHint.value = ''
+  reminderSaving.value = true
+  try {
+    await invoke(
+      () =>
+        SetReminderSettings({
+          quiet_start: quietStart.value.trim(),
+          quiet_end: quietEnd.value.trim(),
+          snooze_minutes: snoozeMinutes.value,
+          notify_enabled: notifyEnabled.value,
+          strong_alert_enabled: strongAlertEnabled.value,
+        }),
+      'SetReminderSettings',
+    )
+    reminderHint.value = '已保存并生效'
+    await refreshReminderSettings()
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    reminderSaving.value = false
+  }
+}
+
+// ---- 桌面宠物 ----
+
+/**
+ * 读取宠物设置与可用素材包。
+ *
+ * 两个调用分开写：素材包列表可能因为用户刚删了目录而失败，但那不该让
+ * 开关/缩放也回显不出来（设置页的半边表格比整页空白有用）。
+ */
+async function refreshPet() {
+  try {
+    const current = await invoke(() => GetPetSettings(), 'GetPetSettings')
+    petVisible.value = current.pet_visible
+    petScale.value = current.pet_scale
+    petPackID.value = current.pet_pack_id
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+  try {
+    petPacks.value = (await invoke(() => ListPetPacks(), 'ListPetPacks')) ?? []
+  } catch (e) {
+    petPacks.value = []
+    actionError.value = e as AppError
+  }
+}
+
+/**
+ * 保存宠物设置并把结果回显。
+ *
+ * 后端在保存后【立即】作用到窗口（开关决定显隐、缩放决定窗口尺寸），
+ * 故这里不需要再调一次 ShowPet/HidePet。
+ */
+async function savePetSettings() {
+  actionError.value = null
+  petHint.value = ''
+  try {
+    const message = await invoke(
+      () =>
+        SetPetSettings({
+          pet_visible: petVisible.value,
+          pet_scale: petScale.value,
+          pet_pack_id: petPackID.value,
+        }),
+      'SetPetSettings',
+    )
+    petHint.value = message || '已保存'
+    logInfo('宠物设置已保存', {
+      visible: petVisible.value,
+      scale: petScale.value,
+      pack: petPackID.value,
+    })
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+}
+
+/**
+ * 导入宠物包：选文件 → 后端复制进数据目录 → 刷新列表并切到新包。
+ *
+ * 返回 null 表示用户在选择框里取消了，此时安静返回（不是错误）。
+ */
+async function importPetPack() {
+  actionError.value = null
+  petHint.value = ''
+  petImporting.value = true
+  try {
+    const pack = await invoke(() => ImportPetPack(), 'ImportPetPack')
+    if (!pack) return
+    petPacks.value = (await invoke(() => ListPetPacks(), 'ListPetPacks')) ?? []
+    petPackID.value = pack.id
+    await savePetSettings()
+    petHint.value = `已导入：${pack.name}`
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    petImporting.value = false
+  }
+}
+
 // 双保险：AppInfo 已含数据目录，若它整条拿不到（极端情况），退回单独查。
 // 顺带拉起各设置项的初始状态。
 onMounted(async () => {
@@ -212,6 +432,9 @@ onMounted(async () => {
     // 同上
   }
   await refreshAutostart()
+  await refreshAISettings()
+  await refreshReminderSettings()
+  await refreshPet()
 })
 </script>
 
@@ -308,6 +531,154 @@ onMounted(async () => {
     </div>
     <p class="setting__note">仅 dev-mcp 构建生效：设置后 MCP 请求需携带 Bearer Token，重启应用后生效。</p>
 
+    <h2 class="setting__section">AI 生成计划</h2>
+
+    <div class="setting">
+      <span class="setting__label">接口地址</span>
+      <input
+        v-model="aiBaseURL"
+        class="setting__input setting__input--wide"
+        placeholder="https://api.deepseek.com/v1"
+        spellcheck="false"
+      />
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">模型</span>
+      <input
+        v-model="aiModel"
+        class="setting__input"
+        placeholder="deepseek-v4.1-flash"
+        spellcheck="false"
+      />
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">API Key</span>
+      <input
+        v-model="aiAPIKey"
+        class="setting__input setting__input--wide"
+        type="password"
+        :placeholder="aiPublic?.api_key_masked || '尚未设置'"
+        spellcheck="false"
+      />
+      <span class="setting__muted">
+        {{ aiPublic?.api_key_set ? '已保存，留空则不修改' : '未设置' }}
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">连接</span>
+      <button class="setting__btn" :disabled="aiSaving" @click="saveAISettings">
+        {{ aiSaving ? '保存中…' : '保存' }}
+      </button>
+      <button class="setting__btn" :disabled="aiTesting" @click="testAIConnection">
+        {{ aiTesting ? '测试中…' : '测试连接' }}
+      </button>
+      <span v-if="aiHint" class="setting__muted">{{ aiHint }}</span>
+    </div>
+
+    <p class="setting__note">
+      AI 只在「生成计划」时调用一次；之后所有提醒都由本地定时器触发，断网也能用。
+    </p>
+
+    <h2 class="setting__section">提醒行为</h2>
+
+    <div class="setting">
+      <span class="setting__label">静默时段</span>
+      <input
+        v-model="quietStart"
+        class="setting__input setting__input--narrow"
+        placeholder="22:00"
+        spellcheck="false"
+      />
+      <span class="setting__muted">至</span>
+      <input
+        v-model="quietEnd"
+        class="setting__input setting__input--narrow"
+        placeholder="08:00"
+        spellcheck="false"
+      />
+      <span class="setting__muted">这段时间不弹通知，但仍会记录</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">推迟分钟</span>
+      <el-input-number
+        v-model="snoozeMinutes"
+        :min="1"
+        :max="120"
+        :step="1"
+        size="small"
+        controls-position="right"
+      />
+      <span class="setting__muted">点「推迟」后多久再提醒一次</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">系统通知</span>
+      <el-switch v-model="notifyEnabled" />
+      <span class="setting__muted">关闭后提醒仍会记录，并显示在首页待处理卡片</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">全屏提醒</span>
+      <el-switch v-model="strongAlertEnabled" />
+      <span class="setting__muted">到点时全屏提醒，不容易漏掉</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label"></span>
+      <button class="setting__btn" :disabled="reminderSaving" @click="saveReminderSettings">
+        {{ reminderSaving ? '保存中…' : '保存提醒设置' }}
+      </button>
+      <span v-if="reminderHint" class="setting__muted">{{ reminderHint }}</span>
+    </div>
+
+    <h2 class="setting__section">桌面宠物</h2>
+
+    <div class="setting">
+      <span class="setting__label">显示宠物</span>
+      <el-switch v-model="petVisible" @change="savePetSettings" />
+      <span class="setting__muted">关掉只是隐藏窗口，提醒仍会记录并进首页的待处理卡片</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">形象</span>
+      <el-select
+        v-model="petPackID"
+        class="setting__select"
+        size="small"
+        @change="savePetSettings"
+      >
+        <el-option v-for="pack in petPacks" :key="pack.id" :label="pack.name" :value="pack.id" />
+      </el-select>
+      <el-button size="small" :loading="petImporting" @click="importPetPack">
+        导入宠物包…
+      </el-button>
+      <span v-if="petHint" class="setting__muted">{{ petHint }}</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">缩放</span>
+      <el-input-number
+        v-model="petScale"
+        :min="0.5"
+        :max="2"
+        :step="0.1"
+        :precision="1"
+        size="small"
+        controls-position="right"
+        @change="savePetSettings"
+      />
+      <span class="setting__muted">窗口会随缩放一起变大，保证宠物不被裁掉</span>
+    </div>
+
+    <p class="setting__note">
+      素材可从 codexpet.top 下载（pet.json + spritesheet.webp）后点「导入宠物包」；
+      若你已在 Codex 客户端装过宠物，这里会自动列出 ~/.codex/pets 下的素材，无需导入。
+    </p>
+
     <p v-if="actionError" class="setting__error">[{{ actionError.code }}] {{ actionError.message }}</p>
   </section>
 </template>
@@ -375,5 +746,25 @@ onMounted(async () => {
 .setting__input:focus {
   outline: none;
   border-color: var(--color-primary);
+}
+/* 分组标题：把「AI」「提醒行为」与上面的通用设置分开，避免一长串同级行 */
+.setting__section {
+  font-size: var(--font-size-md);
+  color: var(--text-2);
+  margin: var(--space-6) 0 var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+/* 地址类输入框要放得下完整 URL */
+.setting__input--wide {
+  width: 360px;
+}
+/* 钟点输入框只放 HH:MM */
+.setting__input--narrow {
+  width: 88px;
+}
+/* 宠物包下拉：名字可能较长（"内置小宠 / 像素小狗"），给足宽度但别撑破一行 */
+.setting__select {
+  width: 200px;
 }
 </style>

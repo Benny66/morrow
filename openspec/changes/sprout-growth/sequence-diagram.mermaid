@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant V as Pet.vue
+    participant A as App(GetPetGrowth)
+    participant S as Service
+    participant D as SQLite
+
+    V->>A: syncGrowth() → GetPetGrowth()
+    A->>S: svc.GetPetGrowth()
+    S->>S: ActiveScenario()
+    alt 无启用场景
+        S-->>A: PetGrowth{Growth:0}
+    else 有场景
+        S->>S: ListReminders(scenarioID)
+        S->>D: completedByReminder(now, today)
+        S->>S: sumTodayTotals(reminders, counts, today)
+        S->>S: growthTier(done, target)
+        S-->>A: PetGrowth{done,target,growth}
+    end
+    A-->>V: PetGrowth
+    V->>V: growth = g.growth（失败则保持原值）
+    V->>V: class pet--growth-N 应用（静态形态 scale/rotate）

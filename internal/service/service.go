@@ -8,6 +8,8 @@
 package service
 
 import (
+	"time"
+
 	"gorm.io/gorm"
 )
 
@@ -15,11 +17,14 @@ import (
 // 由启动时初始化并注入 App，App 不再直接持有 *gorm.DB。
 type Service struct {
 	db *gorm.DB
+	// now 是业务层时钟。一次性提醒的「时间已过去」校验与智能补日期需要可注入的
+	// 当前时间；生产默认 time.Now，测试可以固定时钟，不依赖运行环境的真实时间。
+	now func() time.Time
 }
 
 // New 创建服务聚合，注入数据库连接。
 func New(db *gorm.DB) *Service {
-	return &Service{db: db}
+	return &Service{db: db, now: time.Now}
 }
 
 // Close 释放底层数据库连接，供优雅关闭时调用。

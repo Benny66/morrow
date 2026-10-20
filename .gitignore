@@ -2,7 +2,7 @@
 # 编译产物（wails3 输出到 build/bin，见 Taskfile.yml 的 BIN_DIR）
 build/bin/
 # go build 在根目录产出的裸二进制（占位符/项目名命名）
-my-notice
+morrow
 # 本地数据库文件
 *.db
 *.db-journal

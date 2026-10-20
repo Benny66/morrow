@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"my-notice/internal/appdir"
-	"my-notice/internal/apperr"
-	"my-notice/internal/database"
+	"morrow/internal/appdir"
+	"morrow/internal/apperr"
+	"morrow/internal/database"
 )
 
 // preImportSuffix 导入前的现场备份后缀。备份【保留】不删：它是恢复动作本身的

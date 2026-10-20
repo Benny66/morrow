@@ -9,7 +9,7 @@
 #   - macos             → 仅 mac 上可用，产出美化 dmg（含 Applications 软链）
 #   - linux             → 仅 linux 上可用，否则报错
 #
-# 母版防呆：检测到 my-notice 占位符残留则拒绝打包（母版不能直接打包）。
+# 母版防呆：检测到 __APP_NAME__ 占位符残留则拒绝打包（母版不能直接打包）。
 #
 # 【v3 差异】所有构建都经 scripts/build.sh，由它做版本注入与构建资源渲染。
 # 本脚本不直接调 wails3 —— 否则版本注入就有了第二个入口，
@@ -29,8 +29,7 @@ OS="${1:-}"
 SCOPE="${2:-user}"   # windows 安装范围：user（默认，免管理员）/ machine
 
 # ---- 母版防呆：占位符残留则拒绝打包 ----
-# 注意：检测字符串不能写成裸 my-notice（会被 init.sh 全局替换成项目名，
-# 导致防呆失效）。用下划线拆写规避替换。
+# 注意：占位符写成下划线拆写形式，避免被 init.sh 的全局替换误伤而失效。
 # 清单覆盖占位符真正的落点（v3 没有 wails.json，改查 build/config.yml 与 Taskfile.yml）。
 PLACEHOLDER="__APP_""NAME__"
 if grep -rq "$PLACEHOLDER" go.mod build/config.yml Taskfile.yml main.go 2>/dev/null; then

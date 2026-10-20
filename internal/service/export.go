@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"my-notice/internal/appdir"
-	"my-notice/internal/apperr"
+	"morrow/internal/appdir"
+	"morrow/internal/apperr"
 )
 
 // exportTempSuffix 导出中转文件的扩展名后缀。

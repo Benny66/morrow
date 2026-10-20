@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"my-notice/internal/appdir"
+	"morrow/internal/appdir"
 )
 
 // Options 是日志初始化参数。

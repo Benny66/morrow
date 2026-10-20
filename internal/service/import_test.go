@@ -9,8 +9,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"my-notice/internal/appdir"
-	"my-notice/internal/apperr"
+	"morrow/internal/appdir"
+	"morrow/internal/apperr"
 )
 
 // TestImportDatabaseRestoresData 恢复后 MUST 能通过服务读到备份里的数据——

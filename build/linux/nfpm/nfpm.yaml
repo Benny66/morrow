@@ -3,26 +3,26 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "my-notice"
+name: "Morrow"
 arch: ${GOARCH}
 platform: "linux"
 version: "1.0.0"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "my-notice desktop application"
-vendor: "my-notice"
+description: "Morrow — desktop reminders and habits"
+vendor: "bennywen"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/my-notice"
-    dst: "/usr/local/bin/my-notice"
+  - src: "./bin/Morrow"
+    dst: "/usr/local/bin/Morrow"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/my-notice.png"
-  - src: "./build/linux/my-notice.desktop"
-    dst: "/usr/share/applications/my-notice.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/Morrow.png"
+  - src: "./build/linux/Morrow.desktop"
+    dst: "/usr/share/applications/Morrow.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:

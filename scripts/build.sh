@@ -120,6 +120,21 @@ case "$ACTION" in
     ;;
 esac
 
+# ---- macOS 私有 API：透明窗口的前置条件 ----
+# 桌面宠物是一个透明置顶小窗，而 macOS 的 WKWebView 只有开启私有 API 才会真正透明
+# （详见 pet_window.go 的 Mac.Backdrop 注释与官方文档「Private macOS APIs」）。
+#
+# 不加这个 tag 的症状极具迷惑性：窗口配置看着完全正确、CSS 也写了 transparent，
+# 屏幕上却是一块不透明的底色——因为 webview 自己的绘制背景没被关掉。
+#
+# 只对 darwin 注入；用户显式给了 EXTRA_TAGS 时尊重用户，否则会把 webkit2_41
+# 这类平台标签覆盖掉。
+if [ "$TARGET_GOOS" = "darwin" ] && [ -z "${EXTRA_TAGS:-}" ]; then
+  EXTRA_TAGS="private_mac_apis"
+  export EXTRA_TAGS
+  echo "==> 已启用 macOS 私有 API（private_mac_apis）：透明窗口所需"
+fi
+
 # ---- 版本号 / 产物名（单一真相 + 格式校验：早失败好过打包到最后一步才炸）----
 VERSION="$(bc_version)"
 APP_NAME="$(bc_read_info productName)"
@@ -137,10 +152,12 @@ echo "==> 构建 ${APP_NAME} ${VERSION}${COMMIT:+ (提交 ${COMMIT})} → 目标
 # 【参数顺序要紧】命令行 flag 必须排在 VERSION= / COMMIT= 之前：Go 的 flag 解析
 # 遇到第一个非 flag 参数就停止，`VERSION=x` 不含 `-` 前缀、会被当作位置参数
 # 原样交给 Taskfile 变量，排在它后面的 flag 就再也不被解析了。
+# EXTRA_TAGS 作为 Taskfile 变量传给下层：平台 Taskfile 把它拼进 -tags
+# （见 build/darwin/Taskfile.yml 的 BUILD_FLAGS）。空值 = 不额外加标签。
 if [ "$WAILS_SUBCMD" = "task" ]; then
-  "$(wails3_cli)" task "$ACTION" "$@" VERSION="$VERSION" COMMIT="$COMMIT"
+  "$(wails3_cli)" task "$ACTION" "$@" VERSION="$VERSION" COMMIT="$COMMIT" EXTRA_TAGS="${EXTRA_TAGS:-}"
 else
-  "$(wails3_cli)" "$WAILS_SUBCMD" "$@" VERSION="$VERSION" COMMIT="$COMMIT"
+  "$(wails3_cli)" "$WAILS_SUBCMD" "$@" VERSION="$VERSION" COMMIT="$COMMIT" EXTRA_TAGS="${EXTRA_TAGS:-}"
 fi
 
 # ---- 回读校验 ----

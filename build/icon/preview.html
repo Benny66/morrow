@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morrow · 应用图标交付</title>
+<style>
+  :root {
+    --bg: #0E1219;
+    --panel: #171C26;
+    --panel-2: #1E242F;
+    --line: rgba(255, 255, 255, 0.08);
+    --text: #E8ECF3;
+    --muted: #93A0B4;
+    --brand: #5B8DEF;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 24px 72px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  h2 {
+    margin: 40px 0 14px; font-size: 12px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+  }
+
+  .hero { display: flex; gap: 32px; align-items: center; margin-top: 28px; flex-wrap: wrap; }
+  .artboard {
+    width: 300px; height: 300px; flex: none;
+    background: var(--panel-2);
+    border-radius: 16px;
+    display: grid; place-items: center;
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .artboard svg { width: 244px; height: 244px; display: block; }
+  .facts { min-width: 260px; flex: 1; }
+  .facts dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 13px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+
+  .rows { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .row { display: flex; align-items: flex-end; gap: 22px; padding: 22px 24px; flex-wrap: wrap; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row.dark { background: #1B1F27; }
+  .row.light { background: #F2F3F5; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .cell span { font-size: 10px; letter-spacing: 0.04em; opacity: 0.55; font-variant-numeric: tabular-nums; }
+  .row.light .cell span { color: #4B5565; }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 10px; }
+  button {
+    font: inherit; font-size: 13px; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: 9px 14px; border-radius: 8px; cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  button:hover { background: #242B38; border-color: rgba(255, 255, 255, 0.16); }
+  button.primary { background: var(--brand); border-color: transparent; color: #fff; font-weight: 500; }
+  button.primary:hover { background: #4B79D9; }
+  .hint { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  code {
+    font-family: "SF Mono", ui-monospace, monospace; font-size: 12px;
+    background: rgba(255, 255, 255, 0.06); padding: 2px 6px; border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Morrow · 应用图标</h1>
+    <p>矢量源 <code>appicon.svg</code>，1024 画板，按尺寸精确导出，无位图放大失真。</p>
+  </header>
+
+  <div class="hero">
+    <div class="artboard">
+      <!-- 与 appicon.svg 完全同源；改动请同步两处，或直接以 appicon.svg 为准 -->
+      <svg id="mn-icon" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Morrow">
+        <defs>
+          <linearGradient id="mn-surface" x1="0" y1="0" x2="0.22" y2="1">
+            <stop offset="0" stop-color="#2F3748"/>
+            <stop offset="0.55" stop-color="#1B2130"/>
+            <stop offset="1" stop-color="#10141B"/>
+          </linearGradient>
+          <linearGradient id="mn-sheen" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+            <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+          </linearGradient>
+          <linearGradient id="mn-bell" x1="0.2" y1="0.05" x2="0.8" y2="1">
+            <stop offset="0" stop-color="#FFFFFF"/>
+            <stop offset="0.6" stop-color="#F1F4FA"/>
+            <stop offset="1" stop-color="#C8D3E4"/>
+          </linearGradient>
+          <linearGradient id="mn-badge" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#84A9F7"/>
+            <stop offset="1" stop-color="#4A73D6"/>
+          </linearGradient>
+          <clipPath id="mn-card"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+          <mask id="mn-cut">
+            <rect width="1024" height="1024" fill="#FFFFFF"/>
+            <circle cx="655" cy="330" r="84" fill="#000000"/>
+          </mask>
+        </defs>
+        <g clip-path="url(#mn-card)">
+          <rect x="100" y="100" width="824" height="824" fill="url(#mn-surface)"/>
+          <rect x="100" y="100" width="824" height="511" fill="url(#mn-sheen)"/>
+        </g>
+        <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="4"/>
+        <g mask="url(#mn-cut)">
+          <g transform="translate(164 112.7) scale(28)">
+            <path fill="url(#mn-bell)" d="M5.8 11.6A6.2 6.2 0 0 1 18.2 11.6C18.2 15.2 18.9 16.9 20.4 18.4H3.6C5.1 16.9 5.8 15.2 5.8 11.6Z"/>
+            <circle cx="12" cy="21.05" r="1.5" fill="url(#mn-bell)"/>
+          </g>
+        </g>
+        <circle cx="655" cy="330" r="66" fill="url(#mn-badge)"/>
+      </svg>
+    </div>
+
+    <div class="facts">
+      <dl>
+        <dt>画板 / 内容区</dt><dd>1024 / 824（四边留 100）</dd>
+        <dt>圆角</dt><dd>185（22.4%）</dd>
+        <dt>卡面</dt><dd><i class="swatch" style="background:#1B2130"></i>#2F3748 → #10141B</dd>
+        <dt>符号</dt><dd>铃铛，占内容区 57%</dd>
+        <dt>强调色</dt><dd><i class="swatch" style="background:#5B8DEF"></i>#5B8DEF（未读点，全图唯一彩色）</dd>
+        <dt>最小可用</dt><dd>16px（实心剪影，不靠细线）</dd>
+      </dl>
+    </div>
+  </div>
+
+  <h2>尺寸阶梯</h2>
+  <div class="rows">
+    <div class="row dark" id="row-dark"></div>
+    <div class="row light" id="row-light"></div>
+  </div>
+
+  <h2>导出</h2>
+  <div class="btns" id="btns"></div>
+  <p class="hint">
+    导出的 <code>appicon.png</code> 覆盖 <code>build/appicon.png</code>，再执行
+    <code>wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico</code>
+    （或 <code>task generate:icons</code>）刷新 <code>.icns</code> / <code>.ico</code>。
+  </p>
+</div>
+
+<script>
+  const SIZES = [1024, 512, 256, 128, 64, 48, 32, 24, 16];
+  const svgEl = document.getElementById('mn-icon');
+  const clone = svgEl.cloneNode(true);
+  clone.removeAttribute('id');
+  const uri = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+
+  // 尺寸阶梯：真实像素尺寸，不做 CSS 缩放
+  const LADDER = [128, 64, 48, 32, 24, 16];
+  for (const id of ['row-dark', 'row-light']) {
+    const box = document.getElementById(id);
+    for (const s of LADDER) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const img = new Image(s, s);
+      img.src = uri;
+      img.alt = s + 'px';
+      img.width = s; img.height = s;
+      const label = document.createElement('span');
+      label.textContent = s + 'px';
+      cell.append(img, label);
+      box.append(cell);
+    }
+  }
+
+  async function toCanvas(size) {
+    const img = new Image();
+    img.src = uri;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, size, size);
+    return c;
+  }
+
+  async function download(size, name) {
+    const c = await toCanvas(size);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  const btns = document.getElementById('btns');
+  const b1024 = document.createElement('button');
+  b1024.className = 'primary';
+  b1024.textContent = '导出 appicon.png（1024）';
+  b1024.onclick = () => download(1024, 'appicon.png');
+  btns.append(b1024);
+
+  for (const s of SIZES.slice(1)) {
+    const b = document.createElement('button');
+    b.textContent = 'icon-' + s + '.png';
+    b.onclick = () => download(s, 'icon-' + s + '.png');
+    btns.append(b);
+  }
+  const all = document.createElement('button');
+  all.textContent = '导出全部尺寸';
+  all.onclick = async () => { for (const s of SIZES) await download(s, s === 1024 ? 'appicon.png' : 'icon-' + s + '.png'); };
+  btns.append(all);
+</script>
+</body>
+</html>

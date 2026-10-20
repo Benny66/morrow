@@ -15,17 +15,17 @@
 # 注意：update:build-assets 会【覆盖】你对 build/darwin/Info.plist 与
 # build/windows/info.json 的任何手改。要定制就改本文件。
 #
-# 占位符（my-notice / com.example）由 scripts/init.sh 实例化。
+# 占位符（__APP_NAME__ / com.example）由 scripts/init.sh 实例化。
 # ==========================================================================
 version: '3'
 
 # 用于生成构建资源的信息（版本号单一真相的 v3 位置：info.version）
 info:
-  companyName: "my-notice"
-  productName: "my-notice"
-  productIdentifier: "com.example.my-notice"
-  description: "my-notice desktop application"
-  copyright: "Copyright © 2026 my-notice"
+  companyName: "bennywen"
+  productName: "Morrow"
+  productIdentifier: "io.github.bennywen.morrow"
+  description: "Morrow — desktop reminders and habits"
+  copyright: "Copyright © 2026 bennywen"
   comments: "Built using Wails (https://wails.io)"
   # 版本号单一真相（对应 scripts/set-version.sh 的写入目标）。
   # 必须是数字点分格式：Windows 的 NSIS VIProductVersion 不接受非数字版本。

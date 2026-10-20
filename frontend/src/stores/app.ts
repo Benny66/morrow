@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 // v2 是 '../../wailsjs/go/main/App'；v3 的绑定落在 frontend/bindings/<go module 名>/ 下，
 // 且文件带 .js 后缀（生成器自己内部也是这么 import 的，见 bindings/**/app.ts）。
-import { GetTheme, SetTheme } from '../../bindings/my-notice/app.js'
+import { GetTheme, SetTheme } from '../../bindings/morrow/app.js'
 import { invoke } from '../lib/invoke'
 import { logError } from '../lib/log'
 

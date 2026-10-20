@@ -20,6 +20,16 @@ const (
 	ActionDone = "done"
 	// ActionError 失败结束。
 	ActionError = "error"
+	// ActionFired 一条提醒已送达（domain 为 reminder，见 internal/reminder）。
+	ActionFired = "fired"
+	// ActionChanged 数据变更，前端应重新拉取（打卡 / 推迟 / 计划或场景改动）。
+	ActionChanged = "changed"
+	// ActionDock 桌面宠物贴边收起 / 展开的状态变化（domain 为 pet）。
+	//
+	// 【为什么需要它】贴边时窗口被移到屏幕边缘外，只留一条窄边可见；而"宠物该不该
+	// 平移到那条窄边里"是纯视觉问题，只有前端能决定。故后端把窗口移出去之后必须
+	// 把"现在贴在哪个边"告诉前端，否则用户看到的是宠物凭空消失。
+	ActionDock = "dock"
 )
 
 // Name 拼装符合约定的事件名（`<domain>:<action>`）。

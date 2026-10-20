@@ -32,7 +32,7 @@ import (
 	"runtime"
 	"runtime/debug"
 
-	"my-notice/internal/appdir"
+	"morrow/internal/appdir"
 )
 
 // InjectedVersion 是构建期注入的版本号（数字点分，如 0.1.0），默认空串。

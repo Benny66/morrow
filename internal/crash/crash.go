@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"time"
 
-	"my-notice/internal/appdir"
+	"morrow/internal/appdir"
 )
 
 // Wrap 在独立 goroutine 运行 fn，捕获 panic 并落盘崩溃日志。

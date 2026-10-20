@@ -16,6 +16,12 @@
   --bg-hover:   #1e2128; /* hover 态 */
   --bg-active:  #252932;
 
+  /* 全屏强提醒的遮罩：由底色派生的半透明，不写死 rgba 字面量——
+     换肤时遮罩跟着变，也不会绕过「前端禁硬编码色值」那条护栏。
+     比例说明：暗色下 82% 不透明度足以压住桌面，又还看得出底下是什么窗口
+     （用户需要知道"我的屏幕被盖住了，不是死机了"）。 */
+  --scrim: color-mix(in oklab, var(--bg-base) 82%, transparent);
+
   --text-1: #e6e8eb; /* 主文字 */
   --text-2: #9ba1aa; /* 次级 */
   --text-3: #5c6370; /* 弱化/占位 */
@@ -44,6 +50,10 @@
   --bg-hover:   #eef0f4;
   --bg-active:  #e6e9ef;
 
+  /* 亮色下遮罩要比暗色更淡一档：同样的不透明度在浅底上会显得像"整个屏幕白了"，
+     72% 既压得住桌面，又仍能看出底层窗口的轮廓。 */
+  --scrim: color-mix(in oklab, var(--bg-base) 72%, transparent);
+
   --text-1: #1a1d23;
   --text-2: #5b6270;
   --text-3: #9aa0ab;
@@ -71,6 +81,12 @@
     --bg-raised:  #ffffff;
     --bg-hover:   #eef0f4;
     --bg-active:  #e6e9ef;
+
+    /* 这一块【必须】也有 --scrim，漏掉的后果是确定的：
+       主题选「跟随系统」+ 系统亮色时，--bg-base 被覆写成亮色，而 --scrim 仍继承
+       暗色块的 82% 配方 → 遮罩变成一张近乎不透明的白幕，把屏幕整个糊掉。
+       取值与 [data-theme='light'] 那条一致（72%）。 */
+    --scrim: color-mix(in oklab, var(--bg-base) 72%, transparent);
 
     --text-1: #1a1d23;
     --text-2: #5b6270;

@@ -117,8 +117,8 @@ replace < "_example/frontend/ExampleList.vue" > "frontend/src/views/${SNAKE}/${P
 # 0. app.go import：在 `// gen:import` 前幂等插入 internal/model + internal/page。
 # 绑定方法签名用了 page.Request / page.Result（分页契约），故两个 import 都要有。
 # 幂等：重复生成模块不会产生重复 import（否则编译报 redeclared）。
-insert_line_if_absent "app.go" "// gen:import" '	"my-notice/internal/model"'
-insert_line_if_absent "app.go" "// gen:import" '	"my-notice/internal/page"'
+insert_line_if_absent "app.go" "// gen:import" '	"morrow/internal/model"'
+insert_line_if_absent "app.go" "// gen:import" '	"morrow/internal/page"'
 
 # 1. AllModels() 注册模型
 TMP=$(mktemp)
