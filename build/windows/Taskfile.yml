@@ -1,0 +1,89 @@
+# ==========================================================================
+# build/windows/Taskfile.yml — Windows 构建（被根 Taskfile 以 windows: 引入）
+# --------------------------------------------------------------------------
+# 与 v3 官方模板的差异：
+#   1. 删掉 Docker/Zig 交叉编译路径与 MSIX 打包：本项目只发 NSIS 安装器，
+#      MSIX 需要额外的工具链与证书，留着是没走过的死路径。
+#   2. install scope 默认 user（免管理员）——与 v2 的 `-installscope user` 一致。
+# ==========================================================================
+version: '3'
+
+includes:
+  common: ../Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the Windows executable
+    deps:
+      - task: common:go:mod:tidy
+      - task: common:build:frontend
+        vars:
+          DEV:
+            ref: .DEV
+          EXTRA_TAGS:
+            ref: .EXTRA_TAGS
+          OBFUSCATED:
+            ref: .OBFUSCATED
+      - task: common:generate:icons
+    cmds:
+      - task: generate:syso
+        vars:
+          ARCH: '{{.ARCH}}'
+      # 先删产物再编译：`go build -o` 会拒绝覆盖【不是它自己产出】的既有文件。
+      # 三平台写法一致，免得「哪条路径会撞上」又要靠记忆。详见 darwin Taskfile 的同名注释。
+      - rm -f "{{.OUTPUT}}"
+      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+      - cmd: powershell Remove-item *.syso
+        platforms: [windows]
+      - cmd: rm -f *.syso
+        platforms: [linux, darwin]
+    vars:
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui {{.VERSION_LDFLAGS}}"{{end}}'
+      # 与 darwin/linux 同构：OUTPUT 决定产物路径。注意默认值带 .exe，
+      # create:nsis:installer 依赖这个后缀，覆盖 OUTPUT 时也得自己带上 .exe。
+      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}.exe'
+      OUTPUT: '{{.OUTPUT | default .DEFAULT_OUTPUT}}'
+    env:
+      GOOS: windows
+      CGO_ENABLED: 0
+      GOARCH: '{{.ARCH | default ARCH}}'
+
+  generate:syso:
+    summary: Generates the Windows `.syso` resource (icon + version info + manifest)
+    dir: build
+    cmds:
+      - wails3 generate syso -arch {{.ARCH}} -icon windows/icon.ico -manifest windows/wails.exe.manifest -info windows/info.json -out ../wails_windows_{{.ARCH}}.syso
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+
+  package:
+    summary: Creates the NSIS installer
+    deps:
+      - task: common:update:build-assets
+      - task: build
+    cmds:
+      - task: create:nsis:installer
+
+  create:nsis:installer:
+    summary: Creates an NSIS installer
+    dir: build/windows/nsis
+    preconditions:
+      - sh: '[ "{{.INSTALL_SCOPE}}" = "user" ] || [ "{{.INSTALL_SCOPE}}" = "machine" ]'
+        msg: "INSTALL_SCOPE must be 'user' or 'machine', got '{{.INSTALL_SCOPE}}'"
+    cmds:
+      # WebView2 引导器：目标机器没有 WebView2 时由安装器负责装。
+      - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"
+      - |
+        {{if eq OS "windows"}}
+        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
+        {{else}}
+        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
+        {{end}}
+    vars:
+      ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
+
+  run:
+    summary: Runs the application
+    cmds:
+      - '{{.BIN_DIR}}/{{.APP_NAME}}.exe'

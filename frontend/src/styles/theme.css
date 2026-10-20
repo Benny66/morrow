@@ -1,0 +1,91 @@
+/* ==========================================================================
+   Theme — 语义令牌 + 暗/亮主题映射
+   --------------------------------------------------------------------------
+   这里定义「语义色」（bg/text/border 等），暗/亮各一套，挂在 data-theme。
+   默认暗色；无 data-theme 时跟随系统 prefers-color-scheme。
+   组件只用 var(--bg-*)/var(--text-*)，不直接挑颜色。
+   ========================================================================== */
+
+/* 默认：暗色（专业工具风，色值向 Raycast/Linear 靠拢） */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-base:    #0e0f12; /* 应用底色（近黑） */
+  --bg-raised:  #16181d; /* 卡片/侧栏浮起层 */
+  --bg-hover:   #1e2128; /* hover 态 */
+  --bg-active:  #252932;
+
+  --text-1: #e6e8eb; /* 主文字 */
+  --text-2: #9ba1aa; /* 次级 */
+  --text-3: #5c6370; /* 弱化/占位 */
+
+  --border-subtle: #262a32;
+  --border-strong: #343945;
+
+  --scrollbar: #343945;
+
+  /* 语义状态色（危险/成功/警告） */
+  --color-danger:  #e5484d;
+  --color-success: #30a46c;
+  --color-warning: #f5a524;
+  /* 状态色之上的文字色（恒定为高对比） */
+  --color-on-danger:  #ffffff;
+  --color-on-success: #ffffff;
+  --color-on-warning: #1a1d23;
+}
+
+/* 亮色主题 */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-base:    #f7f8fa;
+  --bg-raised:  #ffffff;
+  --bg-hover:   #eef0f4;
+  --bg-active:  #e6e9ef;
+
+  --text-1: #1a1d23;
+  --text-2: #5b6270;
+  --text-3: #9aa0ab;
+
+  --border-subtle: #e4e7ec;
+  --border-strong: #d0d5dd;
+
+  --scrollbar: #d0d5dd;
+
+  /* 语义状态色（亮色下稍深，保证对比度） */
+  --color-danger:  #d93036;
+  --color-success: #2c8f5b;
+  --color-warning: #d98c0a;
+  --color-on-danger:  #ffffff;
+  --color-on-success: #ffffff;
+  --color-on-warning: #ffffff;
+}
+
+/* 无 data-theme 时跟随系统（默认即暗色优先的兜底逻辑） */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --bg-base:    #f7f8fa;
+    --bg-raised:  #ffffff;
+    --bg-hover:   #eef0f4;
+    --bg-active:  #e6e9ef;
+
+    --text-1: #1a1d23;
+    --text-2: #5b6270;
+    --text-3: #9aa0ab;
+
+    --border-subtle: #e4e7ec;
+    --border-strong: #d0d5dd;
+
+    --scrollbar: #d0d5dd;
+
+    --color-danger:  #d93036;
+    --color-success: #2c8f5b;
+    --color-warning: #d98c0a;
+    --color-on-danger:  #ffffff;
+    --color-on-success: #ffffff;
+    --color-on-warning: #ffffff;
+  }
+}

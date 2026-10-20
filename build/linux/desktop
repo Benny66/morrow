@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=my-notice
+Comment=my-notice desktop application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/my-notice %u
+Terminal=false
+Type=Application
+Icon=my-notice
+Categories=Utility;
+StartupWMClass=my-notice
+
+ 

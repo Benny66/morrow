@@ -1,0 +1,100 @@
+# ==========================================================================
+# build/Taskfile.yml — 跨平台共用任务（被 build/<平台>/Taskfile.yml 以 common: 引入）
+# --------------------------------------------------------------------------
+# 与 v3 官方模板的差异（每处都有理由，改前请读）：
+#   1. 删掉 ios / android / docker / server-mode 任务：本项目是桌面应用，
+#      Linux 打包走本地脚本（见 package.sh），不留永不执行的死代码。
+#   2. build:frontend 去掉 sources/generates 指纹缓存——指纹判错的症状是
+#      「前端产物是旧的而构建成功」，属于本仓最不能接受的那类静默失效。
+#      代价是每次重新 vite build（数秒）。
+#   3. 版本号通过 -ldflags 注入（VERSION_LDFLAGS），见根 Taskfile 的说明。
+# ==========================================================================
+version: '3'
+
+vars:
+  BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s {{.VERSION_LDFLAGS}}"{{end}}'
+
+tasks:
+  go:mod:tidy:
+    summary: Runs `go mod tidy`
+    internal: true
+    # Universal/multi-arch builds invoke this concurrently from parallel deps;
+    # two `go mod tidy` processes racing on go.mod can corrupt it (#4637).
+    run: once
+    cmds:
+      - go mod tidy
+
+  install:frontend:deps:
+    summary: Install frontend dependencies
+    run: once
+    cmds:
+      - task: install:frontend:deps:{{.PACKAGE_MANAGER}}
+
+  install:frontend:deps:npm:
+    dir: frontend
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    preconditions:
+      - sh: npm version
+        msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
+    cmds:
+      - npm install
+
+  build:frontend:
+    label: build:frontend (DEV={{.DEV}})
+    summary: Build the frontend project
+    run: once
+    dir: frontend
+    deps:
+      - task: install:frontend:deps
+      - task: generate:bindings
+    cmds:
+      # DEV=true 时走 build:dev（只跑 vite build，不做类型检查）：dev 态由 vite
+      # dev server 提供页面，不需要产物正确；类型检查在 make lint 里单独跑。
+      - npm run {{if eq .DEV "true"}}build:dev{{else}}build{{end}} -q
+    env:
+      PRODUCTION: '{{if eq .DEV "true"}}false{{else}}true{{end}}'
+
+  generate:bindings:
+    summary: Generates frontend bindings from the Go services
+    run: once
+    deps:
+      - task: go:mod:tidy
+    cmds:
+      # -clean=true：绑定目录被重写。绑定是【生成物但入库】——前端 npm run build
+      # 与 make lint 都需要它存在，干净检出里不跑 wails3 就没有（见 bindings_test.go）。
+      # -i：同时产出 TS 接口（models）。
+      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true -ts -i
+
+  generate:icons:
+    summary: Generates Windows `.ico` and macOS `.icns` from build/appicon.png
+    run: once
+    dir: build
+    sources:
+      - appicon.png
+    generates:
+      - darwin/icons.icns
+      - windows/icon.ico
+    cmds:
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
+
+  dev:frontend:
+    summary: Runs the frontend in development mode
+    deps:
+      - task: install:frontend:deps
+    cmds:
+      - task: frontend:dev:{{.PACKAGE_MANAGER}}
+
+  frontend:dev:npm:
+    dir: frontend
+    cmds:
+      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+
+  update:build-assets:
+    summary: Updates the build assets (Info.plist / windows info.json) from build/config.yml
+    dir: build
+    cmds:
+      - wails3 update build-assets -name "{{.APP_NAME}}" -binaryname "{{.APP_NAME}}" -config config.yml -dir .

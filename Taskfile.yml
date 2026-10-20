@@ -1,0 +1,72 @@
+# ==========================================================================
+# Taskfile.yml — wails3 构建体系入口
+# --------------------------------------------------------------------------
+# 为什么有它：Wails v3 的构建链是 Taskfile 驱动的，`wails3 build` / `wails3 dev`
+# 只是入口，真正的编译命令在 build/<平台>/Taskfile.yml 里。
+#
+# 与 Makefile 的关系：Makefile 仍是【人机唯一命令入口】（铁律 4：只记 make <target>），
+# 本文件是 make 的下层实现。不要让人直接记 `wails3 task ...`——那些命令长、
+# 且在升级 wails3 时会变。
+#
+# 版本注入链（改动前先读）：
+#   `wails3 build` 只把 EXTRA_TAGS / OBFUSCATED / GARBLE_ARGS / GOOS / ARCH
+#   转发成 Taskfile 变量，【不转发 -ldflags】（已实测）。所以版本不能靠
+#   `wails3 build -ldflags` 注入，必须由本文件的 VERSION_LDFLAGS 承担：
+#       scripts/build.sh → `wails3 build VERSION=x.y.z COMMIT=abc1234`
+#       → 本文件 VERSION/COMMIT 变量 → 平台 Taskfile 的 -ldflags
+#   漏了这条链的症状：产物版本正确（Info.plist），应用内版本恒为 dev。
+#   internal/guard/wiring_test.go 会核对注入符号真实存在。
+# ==========================================================================
+version: '3'
+
+vars:
+  APP_NAME: "my-notice"
+  BIN_DIR: "build/bin"
+
+  # Go module 路径（版本注入的 ldflags 需要拼出 -X <module>/internal/appinfo.*）。
+  # 与 go.mod 的 module 行保持一致；由 wiring_test 核对两处不漂移。
+  MODULE: "my-notice"
+
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+
+  # Target OS for build/package/run. Defaults to the host OS, and is overridden
+  # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation.
+  GOOS: '{{.GOOS | default OS}}'
+
+  # ---- 版本注入（由 scripts/build.sh 传入；dev 态留空）----
+  # 留空是刻意的：`wails3 dev` 走的是 `wails3 build DEV=true`，不带这两个变量，
+  # 于是应用内版本退回 appinfo 的 "dev" 兜底——这正是开发态应有的行为。
+  VERSION: ""
+  COMMIT: ""
+
+  # 拼进各平台 BUILD_FLAGS 的 -ldflags 片段。
+  # 单引号：YAML 字面量，不要把 {{}} 当作 YAML 语法。
+  VERSION_LDFLAGS: '{{if .VERSION}}-X {{.MODULE}}/internal/appinfo.InjectedVersion={{.VERSION}}{{end}}{{if .COMMIT}} -X {{.MODULE}}/internal/appinfo.InjectedCommit={{.COMMIT}}{{end}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application
+    cmds:
+      - task: "{{.GOOS}}:build"
+
+  package:
+    summary: Packages a production build of the application
+    cmds:
+      - task: "{{.GOOS}}:package"
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: "{{.GOOS}}:run"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

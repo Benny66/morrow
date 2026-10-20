@@ -1,0 +1,68 @@
+# ==========================================================================
+# build/linux/Taskfile.yml — Linux 构建（被根 Taskfile 以 linux: 引入）
+# --------------------------------------------------------------------------
+# 与 v3 官方模板的差异：
+#   1. 删掉 AppImage / deb / rpm / AUR 任务：本项目在 Linux 上只提供裸二进制
+#      （与 v2 时代的做法一致，见 README 的打包说明）。要发 deb/rpm 时再引入
+#      nfpm 配置，而不是先摆好一套没人跑的打包链。
+#   2. 删掉 Docker 交叉编译：Linux 产物强依赖宿主机的 WebKit 版本，
+#      「在容器里编出来能跑」本身就是个假承诺（详见 .github/workflows/build.yml）。
+# ==========================================================================
+version: '3'
+
+includes:
+  common: ../Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the Linux binary
+    deps:
+      - task: common:go:mod:tidy
+      - task: common:build:frontend
+        vars:
+          DEV:
+            ref: .DEV
+          EXTRA_TAGS:
+            ref: .EXTRA_TAGS
+          OBFUSCATED:
+            ref: .OBFUSCATED
+      - task: common:generate:icons
+    preconditions:
+      # webkit 开发头文件是 cgo 链接的硬要求，缺了会在编译末期报一堆找不到
+      # webkit2gtk-4.0 的错，看不出是「没装系统依赖」。
+      - sh: 'command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1 || pkg-config --exists webkit2gtk-4.0'
+        msg: "缺少 WebKitGTK 开发包。Ubuntu/Debian: sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev（Ubuntu 24.04+ 只有 4.1，需同时传 EXTRA_TAGS=webkit2_41）"
+    cmds:
+      # 先删产物再编译：`go build -o` 会拒绝覆盖【不是它自己产出】的既有文件。
+      # 三平台写法一致，免得「哪条路径会撞上」又要靠记忆。详见 darwin Taskfile 的同名注释。
+      - rm -f "{{.OUTPUT}}"
+      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+    vars:
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s {{.VERSION_LDFLAGS}}"{{end}}'
+      # 与 darwin/windows 保持同构：产物路径由 OUTPUT 决定，默认 BIN_DIR/APP_NAME。
+      # Linux 目前没有 build:universal 调用者，但三平台写法一致才不需要记例外；
+      # 写死 -o 会让任何传 OUTPUT 的调用方静默拿到错误产物（darwin 上已真实发生过）。
+      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
+      OUTPUT: '{{.OUTPUT | default .DEFAULT_OUTPUT}}'
+    env:
+      GOOS: linux
+      CGO_ENABLED: 1
+      GOARCH: '{{.ARCH | default ARCH}}'
+
+  package:
+    summary: 产出可分发的 Linux 二进制（bundle + 校验）
+    deps:
+      # 与 darwin / windows 的 package 保持同构：v3 不会自动渲染构建资源，
+      # 任何 package 路径都必须先跑 update:build-assets（理由见 build/config.yml 头部）。
+      # Linux 现在只出裸二进制、确实用不到渲染结果，但少这一条会让「哪条 package
+      # 路径会渲染」变成一个要靠记忆的例外——而这类例外正是版本双源漂移的入口。
+      - task: common:update:build-assets
+      - task: build
+    cmds:
+      # 冒号后跟空格在 YAML 的裸标量里会被当作键分隔符，故整句用引号包起来
+      - 'echo "✓ 已生成 {{.BIN_DIR}}/{{.APP_NAME}}（裸二进制，无安装包；需要 deb/rpm 时请引入 nfpm 配置）"'
+
+  run:
+    summary: Runs the application
+    cmds:
+      - '{{.BIN_DIR}}/{{.APP_NAME}}'

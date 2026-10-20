@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 1280" width="1360" height="1280">
+  <style>
+    text { font-family: "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Arial,sans-serif; }
+    .h1  { font-size: 26px; font-weight: 700; fill: #0f172a; }
+    .h2  { font-size: 14px; fill: #64748b; }
+    .lbl { font-size: 14px; font-weight: 700; }
+    .t   { font-size: 13px; font-weight: 600; }
+    .s   { font-size: 11px; fill: #64748b; }
+    .lg  { font-size: 13px; fill: #334155; }
+  </style>
+  <defs>
+    <marker id="arr-blue" viewBox="0 0 10 7" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L10,3.5 L0,7 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arr-orange" viewBox="0 0 10 7" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L10,3.5 L0,7 z" fill="#ea580c"/>
+    </marker>
+    <marker id="arr-gray" viewBox="0 0 10 7" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L10,3.5 L0,7 z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1360" height="1280" fill="#ffffff"/>
+  <text class="h1" x="80" y="52">Wails Bailer Starter · 技术架构</text>
+  <text class="h2" x="80" y="78">Go + Vue 3 桌面应用脚手架 · Wails v2.15 · gorm/SQLite · Element Plus · 依赖登记制与架构护栏内建</text>
+  <rect x="80" y="110" width="780" height="110" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="134" fill="#475569">L1 · 桌面运行时层 · Wails v2 Runtime</text>
+  <rect x="105" y="150" width="170" height="56" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text class="t" x="190" y="174" fill="#312e81" text-anchor="middle">Wails Runtime</text>
+  <text class="s" x="190" y="191" text-anchor="middle">WebView2 / WKWebView</text>
+  <rect x="295" y="150" width="170" height="56" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text class="t" x="380" y="174" fill="#312e81" text-anchor="middle">窗口与主题</text>
+  <text class="s" x="380" y="191" text-anchor="middle">Frameless + 系统主题</text>
+  <rect x="485" y="150" width="170" height="56" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text class="t" x="570" y="174" fill="#312e81" text-anchor="middle">单实例锁</text>
+  <text class="s" x="570" y="191" text-anchor="middle">二次启动唤起窗口</text>
+  <rect x="675" y="150" width="160" height="56" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text class="t" x="755" y="174" fill="#312e81" text-anchor="middle">系统托盘 tray</text>
+  <text class="s" x="755" y="191" text-anchor="middle">energye/systray</text>
+  <rect x="80" y="255" width="780" height="260" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="279" fill="#475569">L2 · 前端渲染层 · Vue 3 + Vite + Element Plus</text>
+  <rect x="105" y="303" width="170" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="190" y="329" fill="#1e3a8a" text-anchor="middle">main.ts / App.vue</text>
+  <text class="s" x="190" y="346" text-anchor="middle">应用入口</text>
+  <rect x="295" y="303" width="170" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="380" y="329" fill="#1e3a8a" text-anchor="middle">AppShell 布局</text>
+  <text class="s" x="380" y="346" text-anchor="middle">标题栏 + 侧栏 + 内容</text>
+  <rect x="485" y="303" width="170" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="570" y="329" fill="#1e3a8a" text-anchor="middle">router 路由</text>
+  <text class="s" x="570" y="346" text-anchor="middle">hash 模式，适配 file://</text>
+  <rect x="675" y="303" width="160" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="755" y="329" fill="#1e3a8a" text-anchor="middle">stores/app</text>
+  <text class="s" x="755" y="346" text-anchor="middle">Pinia 全局状态</text>
+  <rect x="105" y="377" width="170" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="190" y="403" fill="#1e3a8a" text-anchor="middle">views 页面</text>
+  <text class="s" x="190" y="420" text-anchor="middle">Home / Settings / gen</text>
+  <rect x="295" y="377" width="170" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="380" y="403" fill="#1e3a8a" text-anchor="middle">components 组件</text>
+  <text class="s" x="380" y="420" text-anchor="middle">TitleBar / EmptyState 等</text>
+  <rect x="485" y="377" width="170" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="570" y="403" fill="#1e3a8a" text-anchor="middle">styles 设计令牌</text>
+  <text class="s" x="570" y="420" text-anchor="middle">tokens / theme / element</text>
+  <rect x="675" y="377" width="160" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="755" y="403" fill="#1e3a8a" text-anchor="middle">wailsjs 绑定</text>
+  <text class="s" x="755" y="420" text-anchor="middle">自动生成，勿手改</text>
+  <rect x="105" y="451" width="730" height="48" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text class="t" x="470" y="480" fill="#1e3a8a" text-anchor="middle">lib/invoke.ts · 绑定调用包装 + 错误归一化（AppError）</text>
+  <rect x="80" y="545" width="780" height="110" rx="10" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="569" fill="#334155">管道契约（Go 与 TS 两端 · 单一真相在 Go）</text>
+  <rect x="105" y="592" width="170" height="50" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="t" x="190" y="613" fill="#334155" text-anchor="middle">apperr 错误协议</text>
+  <text class="s" x="190" y="630" text-anchor="middle">code / message / detail</text>
+  <rect x="295" y="592" width="170" height="50" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="t" x="380" y="613" fill="#334155" text-anchor="middle">page 分页协议</text>
+  <text class="s" x="380" y="630" text-anchor="middle">Request / Result[T]</text>
+  <rect x="485" y="592" width="170" height="50" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="t" x="570" y="613" fill="#334155" text-anchor="middle">event 事件协议</text>
+  <text class="s" x="570" y="630" text-anchor="middle">domain:action + payload</text>
+  <rect x="675" y="592" width="160" height="50" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="t" x="755" y="613" fill="#334155" text-anchor="middle">lib/invoke.ts</text>
+  <text class="s" x="755" y="630" text-anchor="middle">前端镜像，归一化</text>
+  <rect x="80" y="690" width="780" height="130" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="714" fill="#475569">L3 · 绑定方法层 · app.go（不得 import gorm / database，业务一律经 service）</text>
+  <rect x="105" y="740" width="225" height="64" rx="8" fill="#fff7ed" stroke="#f59e0b" stroke-width="1.5"/>
+  <text class="t" x="217" y="768" fill="#7c2d12" text-anchor="middle">App 结构体</text>
+  <text class="s" x="217" y="785" text-anchor="middle">ctx · svc · cfg · trayStop</text>
+  <rect x="350" y="740" width="225" height="64" rx="8" fill="#fff7ed" stroke="#f59e0b" stroke-width="1.5"/>
+  <text class="t" x="462" y="768" fill="#7c2d12" text-anchor="middle">绑定方法</text>
+  <text class="s" x="462" y="785" text-anchor="middle">对话框 · 配置 · 主题 · gen:bind</text>
+  <rect x="595" y="740" width="240" height="64" rx="8" fill="#fff7ed" stroke="#f59e0b" stroke-width="1.5"/>
+  <text class="t" x="715" y="768" fill="#7c2d12" text-anchor="middle">ErrorFormatter</text>
+  <text class="s" x="715" y="785" text-anchor="middle">apperr.Format 输出 JSON 字符串</text>
+  <rect x="80" y="855" width="780" height="115" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="879" fill="#475569">L4 · 业务服务层 · internal/service</text>
+  <rect x="105" y="907" width="350" height="48" rx="8" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <text class="t" x="280" y="927" fill="#064e3b" text-anchor="middle">service.Service</text>
+  <text class="s" x="280" y="944" text-anchor="middle">持有 *gorm.DB，绑定层访问业务的唯一出口</text>
+  <rect x="475" y="907" width="360" height="48" rx="8" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <text class="t" x="655" y="927" fill="#064e3b" text-anchor="middle">业务服务（make gen 注入）</text>
+  <text class="s" x="655" y="944" text-anchor="middle">_example/ 为契约与分层范例</text>
+  <rect x="80" y="1005" width="780" height="130" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="1029" fill="#475569">L5 · 数据与存储层 · gorm + SQLite</text>
+  <rect x="105" y="1055" width="225" height="60" rx="8" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text class="t" x="217" y="1081" fill="#4c1d95" text-anchor="middle">database.Init</text>
+  <text class="s" x="217" y="1098" text-anchor="middle">gorm + SQLite，AutoMigrate</text>
+  <rect x="350" y="1055" width="225" height="60" rx="8" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text class="t" x="462" y="1081" fill="#4c1d95" text-anchor="middle">model.AllModels()</text>
+  <text class="s" x="462" y="1098" text-anchor="middle">模型注册唯一真相</text>
+  <rect x="595" y="1055" width="240" height="60" rx="8" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text class="t" x="715" y="1081" fill="#4c1d95" text-anchor="middle">SQLite 数据文件</text>
+  <text class="s" x="715" y="1098" text-anchor="middle">用户配置目录，纯 Go 无 CGO</text>
+  <rect x="960" y="110" width="360" height="250" rx="10" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="976" y="134" fill="#134e4a">横切基础设施</text>
+  <rect x="980" y="160" width="320" height="50" rx="8" fill="#ccfbf1" stroke="#14b8a6" stroke-width="1.5"/>
+  <text class="t" x="1140" y="181" fill="#134e4a" text-anchor="middle">config · config.json 读写</text>
+  <text class="s" x="1140" y="198" text-anchor="middle">主题等本地配置，退出时落盘</text>
+  <rect x="980" y="222" width="320" height="50" rx="8" fill="#ccfbf1" stroke="#14b8a6" stroke-width="1.5"/>
+  <text class="t" x="1140" y="243" fill="#134e4a" text-anchor="middle">logging · 日志轮转</text>
+  <text class="s" x="1140" y="260" text-anchor="middle">lumberjack 按大小轮转 + 分级</text>
+  <rect x="980" y="284" width="320" height="50" rx="8" fill="#ccfbf1" stroke="#14b8a6" stroke-width="1.5"/>
+  <text class="t" x="1140" y="305" fill="#134e4a" text-anchor="middle">crash · panic 落盘</text>
+  <text class="s" x="1140" y="322" text-anchor="middle">长驻 goroutine 显式包裹</text>
+  <rect x="960" y="400" width="360" height="360" rx="10" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="976" y="424" fill="#7f1d1d">工程护栏与工具链</text>
+  <rect x="980" y="446" width="320" height="62" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.5"/>
+  <text class="t" x="1140" y="473" fill="#7f1d1d" text-anchor="middle">make 统一入口</text>
+  <text class="s" x="1140" y="490" text-anchor="middle">dev / build / test / lint / smoke / package / gen</text>
+  <rect x="980" y="520" width="320" height="62" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.5"/>
+  <text class="t" x="1140" y="547" fill="#7f1d1d" text-anchor="middle">internal/guard 护栏</text>
+  <text class="s" x="1140" y="564" text-anchor="middle">deps 双向 · layer 分层 · contract 契约 · bindings</text>
+  <rect x="980" y="594" width="320" height="62" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.5"/>
+  <text class="t" x="1140" y="621" fill="#7f1d1d" text-anchor="middle">ESLint 前端护栏</text>
+  <text class="s" x="1140" y="638" text-anchor="middle">禁 import node 能力 · 禁硬编码 hex 色值</text>
+  <rect x="980" y="668" width="320" height="62" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.5"/>
+  <text class="t" x="1140" y="695" fill="#7f1d1d" text-anchor="middle">scripts/gen.sh 生成器</text>
+  <text class="s" x="1140" y="712" text-anchor="middle">锚点注入，幂等生成业务模块</text>
+  <rect x="960" y="790" width="360" height="335" rx="10" fill="#fefce8" stroke="#fde047" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="976" y="814" fill="#713f12">单一真相（Single Source of Truth）</text>
+  <rect x="980" y="842" width="320" height="54" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+  <text class="t" x="1140" y="865" fill="#713f12" text-anchor="middle">model.AllModels()</text>
+  <text class="s" x="1140" y="882" text-anchor="middle">模型清单唯一出处</text>
+  <rect x="980" y="908" width="320" height="54" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+  <text class="t" x="1140" y="931" fill="#713f12" text-anchor="middle">deps.yaml</text>
+  <text class="s" x="1140" y="948" text-anchor="middle">依赖登记清单（护栏双向校验）</text>
+  <rect x="980" y="974" width="320" height="54" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+  <text class="t" x="1140" y="997" fill="#713f12" text-anchor="middle">openspec/specs</text>
+  <text class="s" x="1140" y="1014" text-anchor="middle">能力规格基线</text>
+  <rect x="980" y="1040" width="320" height="54" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+  <text class="t" x="1140" y="1063" fill="#713f12" text-anchor="middle">_example/</text>
+  <text class="s" x="1140" y="1080" text-anchor="middle">契约与分层范例（非产品页面）</text>
+  <path d="M 470,220 L 470,255" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text class="s" x="478" y="243">渲染 UI</text>
+  <path d="M 470,515 L 470,545" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text class="s" x="478" y="534">调用</text>
+  <path d="M 470,655 L 470,690" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text class="s" x="478" y="677">Go 方法</text>
+  <path d="M 470,820 L 470,855" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text class="s" x="478" y="842">经 service</text>
+  <path d="M 470,970 L 470,1005" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text class="s" x="478" y="992">gorm / SQL</text>
+  <rect x="13" y="610" width="64" height="20" fill="#ffffff" opacity="0.95"/>
+  <path d="M 105,772 L 45,772 L 45,475 L 105,475" fill="none" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" marker-end="url(#arr-orange)"/>
+  <text class="s" x="45" y="624" text-anchor="middle">错误回流</text>
+  <path d="M 960,240 L 910,240 L 910,178 L 860,178" fill="none" stroke="#64748b" stroke-width="2" stroke-linejoin="round" marker-end="url(#arr-gray)" stroke-dasharray="5,3"/>
+  <path d="M 960,340 L 910,340 L 910,1060 L 860,1060" fill="none" stroke="#64748b" stroke-width="2" stroke-linejoin="round" marker-end="url(#arr-gray)" stroke-dasharray="5,3"/>
+  <path d="M 960,500 L 930,500 L 930,780 L 860,780" fill="none" stroke="#64748b" stroke-width="2" stroke-linejoin="round" marker-end="url(#arr-gray)" stroke-dasharray="5,3"/>
+  <path d="M 960,900 L 950,900 L 950,1100 L 860,1100" fill="none" stroke="#64748b" stroke-width="2" stroke-linejoin="round" marker-end="url(#arr-gray)" stroke-dasharray="5,3"/>
+  <rect x="80" y="1170" width="1240" height="65" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text class="lbl" x="96" y="1194" fill="#475569">图例</text>
+  <path d="M 200,1211 L 250,1211" stroke="#2563eb" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text class="lg" x="262" y="1215">调用 / 数据流（渲染 · 绑定 · service · SQLite）</text>
+  <path d="M 620,1211 L 670,1211" stroke="#ea580c" stroke-width="2" marker-end="url(#arr-orange)"/>
+  <text class="lg" x="682" y="1215">返回与错误（AppError 归一化后回流）</text>
+  <path d="M 950,1211 L 1000,1211" stroke="#64748b" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arr-gray)"/>
+  <text class="lg" x="1012" y="1215">装配与校验（配置 · 日志 · 护栏 · 单一真相）</text>
+</svg>

@@ -1,0 +1,32 @@
+// ---------------------------------------------------------------------------
+// 绑定方法：Example（生成器注入片段，见 scripts/gen.sh）
+//
+// 契约：绑定方法只做转发，业务逻辑在 service 层；
+// 错误一律返回 error（由 main.go 的 ErrorFormatter 序列化为结构化 JSON 给前端）。
+// ---------------------------------------------------------------------------
+
+// ListExamples 分页查询列表。
+func (a *App) ListExamples(req page.Request) (page.Result[model.Example], error) {
+	return a.svc.ListExamples(req)
+}
+
+// GetExample 按 ID 查询单个。
+func (a *App) GetExample(id uint) (*model.Example, error) {
+	return a.svc.GetExample(id)
+}
+
+// CreateExample 新增。
+func (a *App) CreateExample(item *model.Example) error {
+	return a.svc.CreateExample(item)
+}
+
+// UpdateExample 更新。
+func (a *App) UpdateExample(item *model.Example) error {
+	return a.svc.UpdateExample(item)
+}
+
+// DeleteExample 删除。
+func (a *App) DeleteExample(id uint) error {
+	return a.svc.DeleteExample(id)
+}
+// TODO: 业务逻辑 —— 绑定方法只做转发，复杂逻辑放 service 层。

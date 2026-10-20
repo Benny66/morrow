@@ -1,0 +1,96 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  # 静态检查：护栏 + lint（不启动 GUI）
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend deps
+        run: cd frontend && npm install
+
+      # 必须先构建前端：根包（main.go）用 //go:embed 嵌入 frontend/dist，
+      # 而该目录被 gitignore —— 干净检出里没有它，编译根包会失败：
+      #   `pattern all:frontend/dist: no matching files found`
+      # 此前本 job 只 npm install 不构建，导致 check 每次必红。
+      - name: Build frontend (供 go:embed 使用)
+        run: cd frontend && npm run build
+
+      - name: Run tests (含护栏)
+        run: make test
+
+      - name: Run lint
+        run: make lint
+
+  # 编译矩阵（只编译，不启动 GUI）。
+  #
+  # 刻意【不含 Linux】：Linux 产物要求系统装了哪个 webkit 版本（wails 默认找
+  # webkit2gtk-4.0，而 Ubuntu 24.04+/Debian 13+ 只有 4.1，需 -tags webkit2_41），
+  # 这类环境耦合让「编译通过」取决于 runner 镜像的包，维护成本高于收益。
+  # Linux 仍可本地打包（见 README 的打包说明），但不在 CI 的验证承诺内。
+  #
+  # Linux 的 Go 层覆盖仍由上面的 check job（ubuntu-latest）承担：
+  # test / vet / lint / 护栏 / 生成器端到端都在那里跑。
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 装 wails3 CLI。版本【取自 go.mod】而不是写死：CLI 与依赖库必须同版本，
+      # 写死会出现「go.mod 升了、CI 还在用旧 CLI」的静默错配——症状是 CI 的构建
+      # 方式与本地不一致，而两边都「成功」。go.mod 是 wails 版本的唯一真相。
+      # 注意可执行名是 wails3（v2 的 CLI 叫 wails，两者不通用）。
+      - name: Install wails3 CLI (version from go.mod)
+        run: |
+          set -euo pipefail
+          V="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
+          echo "wails3 CLI 版本（取自 go.mod）: $V"
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${V}"
+          wails3 version
+
+      - name: Install frontend deps
+        run: cd frontend && npm install
+
+      - name: Build
+        run: make build
+
+      # 生成器端到端验证：连生 2 个模块 → 生成 bindings → 编译 → gofmt → 护栏。
+      # 这是本仓唯一的端到端检查，历史上抓到过 3 个真实 bug（缺 import / 注入非幂等 /
+      # 产物不符 gofmt），此前只在本地跑、靠人记得。
+      # 只跑一次即可（检查内容与平台无关）；放在 macos 腿是因为 Windows runner 无 rsync。
+      - name: Generator end-to-end (verify-gen)
+        if: matrix.os == 'macos-latest'
+        run: make verify-gen
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: build/bin/

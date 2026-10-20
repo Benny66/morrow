@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "1.0.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "1.0.0",
+			"CompanyName": "my-notice",
+			"FileDescription": "my-notice desktop application",
+			"LegalCopyright": "Copyright © 2026 my-notice",
+			"ProductName": "my-notice",
+			"Comments": "Built using Wails (https://wails.io)"
+		}
+	}
+}

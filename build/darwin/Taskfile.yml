@@ -1,0 +1,124 @@
+# ==========================================================================
+# build/darwin/Taskfile.yml — macOS 构建（被根 Taskfile 以 darwin: 引入）
+# --------------------------------------------------------------------------
+# 与 v3 官方模板的差异：
+#   1. 删掉 Docker 交叉编译路径（build:docker / setup:docker）：Wails 不支持
+#      macOS 交叉编译产出可用 .app，留着只是死代码。
+#   2. `package` / `run` 把 update:build-assets 列为前置依赖——这是本仓对
+#      「v3 必须显式渲染构建资源」这一坑的结构性对策：Info.plist 的版本号
+#      只能来自 build/config.yml，每次打包都重新渲染，双源漂移无从发生。
+#   3. 删掉 `package:dmg` / `create:dmg`（模板用 `wails3 tool package --format dmg`）：
+#      dmg 由 scripts/package.sh 用 hdiutil + osascript 手工封装，理由是那份实现
+#      带【背景图合成 + 图标锚点对齐 + 产出后回读 .DS_Store 校验】，且是 openspec
+#      `dmg-polish` / `install-experience` 两个能力明文的 Requirement（含「零外部依赖」
+#      与「挂载点契约」）。留着模板这份 = 同一个规则两套实现，
+#      且它引用的是入库的占位背景图、不做回读校验——正是本仓最不能接受的静默失效。
+#      要出 dmg：`make package os=macos`。
+# ==========================================================================
+version: '3'
+
+includes:
+  common: ../Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the macOS binary
+    deps:
+      - task: common:go:mod:tidy
+      - task: common:build:frontend
+        vars:
+          DEV:
+            ref: .DEV
+          EXTRA_TAGS:
+            ref: .EXTRA_TAGS
+          OBFUSCATED:
+            ref: .OBFUSCATED
+      - task: common:generate:icons
+    cmds:
+      # 先删产物再编译。理由：`go build -o` 遇到【不是它自己产出】的既有文件会拒绝覆盖
+      # （报 "build output ... already exists and is not an object file"）。
+      # 而 build:universal 用 lipo 合并出的 universal 二进制正好不被认作 Go 产出。
+      # 于是「先 make package 再 make build」这一步必炸（本机 go1.26.2 实测；
+      # go1.25 未验证，但这一行在哪个版本上都无害）。
+      # 删的是本任务自己声明的产物路径，且位于 gitignore 的 build/bin/ 下，删之无损。
+      - rm -f "{{.OUTPUT}}"
+      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+    vars:
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s {{.VERSION_LDFLAGS}}"{{end}}'
+      # -o 必须走 OUTPUT 而不是写死 BIN_DIR/APP_NAME：build:universal 靠给两次
+      # build 传不同的 OUTPUT（-amd64 / -arm64）才能产出两个架构的中间产物，
+      # 写死的话两次编译会覆盖同一个文件，lipo 随后报 "can't open input file"。
+      # 这条曾经真的断过（v3 迁移时照抄模板漏了 OUTPUT），故此处与上游对齐。
+      # 默认值必须与写死时的路径一致，否则 create:app:bundle / run 找不到二进制。
+      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
+      OUTPUT: '{{.OUTPUT | default .DEFAULT_OUTPUT}}'
+    env:
+      GOOS: darwin
+      CGO_ENABLED: 1
+      GOARCH: '{{.ARCH | default ARCH}}'
+      # v3 的最低系统版本是 12.0（v2 是 10.13）：框架自身的 webview 层要求。
+      # 三处必须一致——这里的 CGO/MACOSX_DEPLOYMENT_TARGET、build/darwin/Info.plist
+      # 的 LSMinimumSystemVersion、以及 README 的系统要求说明。
+      CGO_CFLAGS: "-mmacosx-version-min=12.0"
+      CGO_LDFLAGS: "-mmacosx-version-min=12.0"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+  build:universal:
+    summary: Builds a universal binary (arm64 + amd64)
+    deps:
+      - task: build
+        vars:
+          ARCH: amd64
+          OUTPUT: "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
+      - task: build
+        vars:
+          ARCH: arm64
+          OUTPUT: "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
+    cmds:
+      - lipo -create -output "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}-amd64" "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
+      - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}-amd64" "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
+
+  package:
+    summary: Packages the application into a `.app` bundle
+    deps:
+      - task: common:update:build-assets
+      - task: build
+    cmds:
+      - task: create:app:bundle
+
+  package:universal:
+    summary: Packages a universal binary into a `.app` bundle
+    deps:
+      - task: common:update:build-assets
+      - task: build:universal
+    cmds:
+      - task: create:app:bundle
+
+  create:app:bundle:
+    summary: Creates the `.app` bundle
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
+      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      - task: codesign:adhoc
+
+  codesign:adhoc:
+    summary: Ad-hoc signs the app bundle
+    internal: true
+    cmds:
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+
+  run:
+    summary: Runs the application in dev mode（先包一个 .dev.app，macOS 的 GUI 应用需要 bundle）
+    deps:
+      - task: common:update:build-assets
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
+      - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'

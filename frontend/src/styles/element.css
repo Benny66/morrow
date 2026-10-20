@@ -1,0 +1,64 @@
+/* ==========================================================================
+   Element Plus 重主题
+   --------------------------------------------------------------------------
+   EP 是功能底座（表格/表单/分页/弹窗），这里用设计令牌覆盖其默认观感。
+   下游永远只看到自定义外观，不需要知道下面是 EP。
+   ========================================================================== */
+
+:root {
+  /* 主色：映射到我们的色阶 */
+  --el-color-primary: var(--color-primary);
+  --el-color-primary-light-3: var(--color-primary-300);
+  --el-color-primary-light-5: var(--color-primary-200);
+  --el-color-primary-light-7: var(--color-primary-100);
+  --el-color-primary-light-8: var(--color-primary-50);
+  --el-color-primary-light-9: var(--color-primary-50);
+  --el-color-primary-dark-2: var(--color-primary-700);
+
+  /* 中性色：映射语义令牌 */
+  --el-bg-color: var(--bg-raised);
+  --el-bg-color-page: var(--bg-base);
+  --el-bg-color-overlay: var(--bg-raised);
+  --el-text-color-primary: var(--text-1);
+  --el-text-color-regular: var(--text-2);
+  --el-text-color-secondary: var(--text-3);
+  --el-text-color-placeholder: var(--text-3);
+  --el-border-color: var(--border-subtle);
+  --el-border-color-light: var(--border-subtle);
+  --el-border-color-lighter: var(--border-subtle);
+  --el-fill-color-blank: var(--bg-raised);
+  --el-fill-color-light: var(--bg-hover);
+  --el-fill-color: var(--bg-hover);
+
+  /* 圆角：统一到令牌 */
+  --el-border-radius-base: var(--radius-md);
+  --el-border-radius-small: var(--radius-sm);
+  --el-border-radius-round: var(--radius-full);
+
+  /* 字体 */
+  --el-font-family: var(--font-family);
+}
+
+/* 表格：更贴近工具的紧凑观感 */
+.el-table {
+  --el-table-border-color: var(--border-subtle);
+  --el-table-header-bg-color: var(--bg-hover);
+  --el-table-header-text-color: var(--text-2);
+  --el-table-row-hover-bg-color: var(--bg-hover);
+  --el-table-bg-color: var(--bg-raised);
+  --el-table-tr-bg-color: var(--bg-raised);
+}
+
+/* 菜单/弹窗 overlay 背景与边框 */
+.el-popper {
+  --el-border-color-light: var(--border-subtle);
+}
+
+/* 按钮：primary 用主色，hover/active 用派生语义色 */
+.el-button--primary {
+  --el-button-hover-bg-color: var(--color-primary-hover);
+  --el-button-active-bg-color: var(--color-primary-active);
+  --el-button-border-color: var(--color-primary);
+  --el-button-hover-border-color: var(--color-primary-hover);
+  --el-button-active-border-color: var(--color-primary-active);
+}

@@ -1,0 +1,52 @@
+# ---- Go ----
+# 编译产物（wails3 输出到 build/bin，见 Taskfile.yml 的 BIN_DIR）
+build/bin/
+# go build 在根目录产出的裸二进制（占位符/项目名命名）
+my-notice
+# 本地数据库文件
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ---- Wails v3 构建体系 ----
+# Taskfile 的运行期状态（任务指纹/缓存），每次构建都会变
+.task/
+# update:build-assets 也会生成 ios/android 目录，但本项目只做桌面端。
+# 这两个目录【生成不幂等】（pbxproj 里带生成时间戳），入库会让每次构建都产生
+# 无意义的 git 改动，故忽略。需要移动端支持时再放开。
+build/ios/
+build/android/
+
+# ---- Node / 前端 ----
+node_modules/
+frontend/dist/
+# wails3 generate bindings 的产物（common:generate:bindings，每次 build:frontend 都重跑）。
+# 与 frontend/dist 同类：由 Go 服务的定义派生，不是手写代码。
+# 【为什么必须忽略】入库会造出一个没有症状的漂移面：改了 Go 绑定签名、提交了代码却
+# 忘了重新生成，vue-tsc 会拿【旧】的 .d.ts 校验前端——类型检查照过，运行期才炸。
+# 注意它按模块路径分目录（frontend/bindings/<go module>/...），目录名由 go.mod 决定。
+frontend/bindings/
+# wails 打包缓存（依赖指纹，会自动重新生成）
+frontend/package.json.md5
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 系统文件 ----
+.DS_Store
+Thumbs.db
+
+# ---- 编辑器 ----
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- 补丁/合并残留 ----
+*.orig
+*.rej
+
+# ---- 本地工作目录 ----
+.workbuddy/

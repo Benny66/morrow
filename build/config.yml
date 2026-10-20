@@ -1,0 +1,62 @@
+# ==========================================================================
+# build/config.yml — 构建配置（Wails v3 的配置载体，取代 v2 的 wails.json）
+# --------------------------------------------------------------------------
+# 这是【构建资源的唯一真相】：wails3 从本文件渲染
+#   build/darwin/Info.plist        （macOS 版本号 / bundle id / 展示名）
+#   build/windows/info.json        （Windows exe 版本资源）
+#
+# ★ 改完 info 段【必须】跑一次：
+#       wails3 task common:update:build-assets
+#   否则产物里的版本仍是旧值。v2 时代 `wails build` 会自动渲染，v3 必须显式执行。
+#   漏掉的症状：应用内显示新版本、系统「显示简介」显示旧版本——双源漂移。
+#   scripts/build.sh 已把这一步固化进构建流程，正常你不需要手动跑；
+#   直接手改本文件后忘了跑，internal/guard/wiring_test.go 的版本一致性护栏会报出来。
+#
+# 注意：update:build-assets 会【覆盖】你对 build/darwin/Info.plist 与
+# build/windows/info.json 的任何手改。要定制就改本文件。
+#
+# 占位符（my-notice / com.example）由 scripts/init.sh 实例化。
+# ==========================================================================
+version: '3'
+
+# 用于生成构建资源的信息（版本号单一真相的 v3 位置：info.version）
+info:
+  companyName: "my-notice"
+  productName: "my-notice"
+  productIdentifier: "com.example.my-notice"
+  description: "my-notice desktop application"
+  copyright: "Copyright © 2026 my-notice"
+  comments: "Built using Wails (https://wails.io)"
+  # 版本号单一真相（对应 scripts/set-version.sh 的写入目标）。
+  # 必须是数字点分格式：Windows 的 NSIS VIProductVersion 不接受非数字版本。
+  version: "1.0.0"
+
+# 开发态配置（wails3 dev 读取）
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - .task
+      - node_modules
+      - frontend
+      - build/bin
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  # dev 的启动序列：先编译（阻塞），再起前端 dev server（后台），最后跑应用。
+  # 注意 common:dev:frontend 与 run 都是 Taskfile 里的任务名，改名会静默失效。
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary

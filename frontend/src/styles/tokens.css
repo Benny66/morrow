@@ -1,0 +1,109 @@
+/* ==========================================================================
+   Design Tokens — 设计令牌唯一真相
+   --------------------------------------------------------------------------
+   本文件是颜色/间距/圆角/阴影/字体/动效的唯一出处。
+   组件只引用 var(--token-*)，禁止写死字面量（guardrails 的 ESLint 强制）。
+
+   换肤 = 只改下面「品牌」区的 3 个值：--color-primary / 名称 / logo。
+   ========================================================================== */
+
+:root {
+  /* ------------------------------------------------------------------
+   * 品牌（唯一需要下游改动的区域）
+   * 主色是色阶的唯一输入，其余全部自动派生。
+   * ------------------------------------------------------------------ */
+  --color-primary: #5b8def;
+
+  /* ------------------------------------------------------------------
+   * 主色色阶：由 --color-primary 用 color-mix(oklab) 派生
+   * 50(最浅) → 900(最深)，比例对齐 Material 色阶
+   * ------------------------------------------------------------------ */
+  --color-primary-50:  color-mix(in oklab, var(--color-primary) 8%, white);
+  --color-primary-100: color-mix(in oklab, var(--color-primary) 20%, white);
+  --color-primary-200: color-mix(in oklab, var(--color-primary) 36%, white);
+  --color-primary-300: color-mix(in oklab, var(--color-primary) 52%, white);
+  --color-primary-400: color-mix(in oklab, var(--color-primary) 76%, white);
+  --color-primary-500: var(--color-primary);
+  --color-primary-600: color-mix(in oklab, var(--color-primary) 88%, black);
+  --color-primary-700: color-mix(in oklab, var(--color-primary) 72%, black);
+  --color-primary-800: color-mix(in oklab, var(--color-primary) 52%, black);
+  --color-primary-900: color-mix(in oklab, var(--color-primary) 32%, black);
+
+  /* ------------------------------------------------------------------
+   * 语义色：由色阶派生（非另写死色值）
+   * ------------------------------------------------------------------ */
+  --color-primary-hover:  var(--color-primary-400);
+  --color-primary-active: var(--color-primary-300);
+  --color-primary-border: var(--color-primary-600);
+  --color-primary-soft:   var(--color-primary-100); /* 浅底/选中背景 */
+
+  /* ------------------------------------------------------------------
+   * 间距（4px 基准）
+   * ------------------------------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ------------------------------------------------------------------
+   * 圆角（工具感，避免过圆）
+   * ------------------------------------------------------------------ */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-full: 9999px;
+
+  /* ------------------------------------------------------------------
+   * 阴影（暗色下多层低对比，有层次不脏）
+   * ------------------------------------------------------------------ */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+
+  /* ------------------------------------------------------------------
+   * 字体
+   * ------------------------------------------------------------------ */
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+
+  /* ------------------------------------------------------------------
+   * 动效（快、克制）
+   * ------------------------------------------------------------------ */
+  --motion-fast: 120ms;
+  --motion-normal: 200ms;
+  --motion-slow: 300ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==========================================================================
+   Fallback：极老 WebView2 不支持 color-mix(in oklab) 时，用静态预置色阶
+   ========================================================================== */
+@supports not (color: color-mix(in oklab, red 50%, white)) {
+  :root {
+    --color-primary-50:  #eef3fd;
+    --color-primary-100: #dbe6fb;
+    --color-primary-200: #b7ccf7;
+    --color-primary-300: #93b2f3;
+    --color-primary-400: #6f98ef;
+    --color-primary-500: #5b8def;
+    --color-primary-600: #4974d2;
+    --color-primary-700: #3a5cb0;
+    --color-primary-800: #2b448e;
+    --color-primary-900: #1c2d6c;
+    --color-primary-hover:  var(--color-primary-400);
+    --color-primary-active: var(--color-primary-300);
+    --color-primary-border: var(--color-primary-600);
+    --color-primary-soft:   var(--color-primary-100);
+  }
+}
