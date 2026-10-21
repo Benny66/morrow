@@ -21,8 +21,12 @@ permissions:
 
 jobs:
   # 发版前先跑一遍静态检查：tag 可能被打在没走过 CI 的提交上
+  #
+  # 【为什么跑在 macOS】与 build.yml 的 check job 同理：wails3 生成绑定需要对整个
+  # Go 项目做类型检查，Wails 的 application 包在 Linux 上要 GTK/WebKit 头文件；
+  # 而 frontend/bindings/ 不入库，vue-tsc 前必须先生成。
   verify:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +37,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Install wails3 CLI (version from go.mod)
+        run: |
+          set -euo pipefail
+          V="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
+          echo "wails3 CLI 版本（取自 go.mod）: $V"
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${V}"
+          wails3 version
+
+      - name: Generate Go↔TS bindings
+        run: wails3 generate bindings -clean=true -ts
 
       - name: Install frontend deps
         run: cd frontend && npm install

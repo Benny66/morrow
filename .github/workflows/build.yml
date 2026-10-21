@@ -7,8 +7,13 @@ on:
 
 jobs:
   # 静态检查：护栏 + lint（不启动 GUI）
+  #
+  # 【为什么跑在 macOS 而不是 ubuntu】`wails3 generate bindings` 要对整个 Go 项目
+  # 做类型检查；Wails 的 application 包在 Linux 上依赖 GTK/WebKit 头文件，ubuntu
+  # runner 默认没有，生成阶段就会失败。而 frontend/bindings/ 是不入库的生成产物，
+  # 干净检出里必须先生成，vue-tsc / vite build 才能解析 import。
   check:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -20,13 +25,27 @@ jobs:
         with:
           node-version: '22'
 
+      # wails3 CLI 版本取自 go.mod（CLI 与依赖库必须同版本），与 build job 一致。
+      - name: Install wails3 CLI (version from go.mod)
+        run: |
+          set -euo pipefail
+          V="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
+          echo "wails3 CLI 版本（取自 go.mod）: $V"
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${V}"
+          wails3 version
+
+      # 【必须在 npm run build 之前】frontend/bindings/** 由 app.go 的导出方法生成，
+      # 且被 gitignore。缺了它，vue-tsc 会报几十条
+      # `Cannot find module '../../bindings/morrow/app.js'`。
+      - name: Generate Go↔TS bindings
+        run: wails3 generate bindings -clean=true -ts
+
       - name: Install frontend deps
         run: cd frontend && npm install
 
       # 必须先构建前端：根包（main.go）用 //go:embed 嵌入 frontend/dist，
       # 而该目录被 gitignore —— 干净检出里没有它，编译根包会失败：
       #   `pattern all:frontend/dist: no matching files found`
-      # 此前本 job 只 npm install 不构建，导致 check 每次必红。
       - name: Build frontend (供 go:embed 使用)
         run: cd frontend && npm run build
 
