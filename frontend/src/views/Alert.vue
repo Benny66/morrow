@@ -24,20 +24,43 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   CompleteReminder,
+  CompleteRestMode,
   GetReminderSettings,
+  GetRestModeSnapshot,
   HideAlert,
   ListPendingFires,
   ShowAlert,
   SkipReminder,
+  SkipRestMode,
   SnoozeReminder,
 } from '../../bindings/morrow/app.js'
 import { invoke } from '../lib/invoke'
 import { useEvent } from '../composables/useEvent'
 import { ReminderEvent } from '../lib/reminder'
+import { formatRemaining } from '../lib/restmode'
+import { State as RestModeState, type Snapshot as RestModeSnapshot } from '../../bindings/morrow/internal/restmode/models.js'
 import { logInfo, logWarn } from '../lib/log'
 
 /** 待处理提醒（用绑定返回类型反推，不手写镜像——Go 侧一改这里立刻跟着变）。 */
 type PendingFire = NonNullable<Awaited<ReturnType<typeof ListPendingFires>>>[number]
+
+/**
+ * 是否为【主屏】的 alert 窗口（US-18/19）。
+ *
+ * main.go 建窗时给 URL 加了 `?p=1` / `?p=0`；副屏（p=0）只渲染简化卡片与遮罩，
+ * 不重复显示场景名/推迟按钮/额外条数——用户在副屏点【完成】就够了。
+ * 休息模式覆盖层（Countdown）在两种屏都渲染，倒计时数字两边都能看到。
+ *
+ * 【为什么用 hash query 而不是 window label 判】label 是 Go 内部命名（"alert"/"alert-2"...），
+ * 暴露给前端会让"命名规则"变成第二处真相；query 是一次性的、语义明确的字符串。
+ */
+const isPrimary = (() => {
+  const hash = window.location.hash
+  const qIdx = hash.indexOf('?')
+  if (qIdx < 0) return true // 兜底：老 URL（没 query）当主屏渲染，不出现"所有屏都简化"的空态
+  const params = new URLSearchParams(hash.slice(qIdx + 1))
+  return params.get('p') !== '0'
+})()
 
 /**
  * 倒计时的推进间隔（毫秒）。
@@ -57,6 +80,22 @@ const strongAlertEnabled = ref(true)
 const nowMs = ref(Date.now())
 /** 是否正在执行打卡动作：防止一次点击被重复提交。 */
 const busy = ref(false)
+
+/**
+ * 休息模式快照。Idle 时前端渲染【普通卡片】；Countdown 时切换到【休息覆盖层】。
+ *
+ * 【为什么每秒查询而不是订阅事件】休息模式的状态在服务端 tick 里会变（自动
+ * 完成 → Done → Reset → Idle），事件通道只有「服务端主动通知」这一路；加
+ * restmode:state 事件意味着前后端都得维护一条新的订阅——但快照本来就要在
+ * tick 里查（拿 remaining），事件反而是多余的。见 ticket 007 讨论。
+ */
+const restSnapshot = ref<RestModeSnapshot | null>(null)
+const restActive = computed(() => restSnapshot.value?.state === RestModeState.StateCountdown)
+const restRemaining = computed(() => formatRemaining(restSnapshot.value?.remaining_sec ?? 0))
+const restCue = computed(() => restSnapshot.value?.cue_text ?? '')
+const restTitle = computed(() => restSnapshot.value?.title ?? '该休息一下了')
+/** 「提前结束」确认对话框：true 时显示；只从 Countdown 中触发。 */
+const showEarlyDialog = ref(false)
 
 // ---- 计时器句柄（普通变量：不参与渲染）----
 
@@ -121,6 +160,9 @@ function startTicker(): void {
   nowMs.value = Date.now()
   tick = window.setInterval(() => {
     nowMs.value = Date.now()
+    // 与 nowMs 一起刷新休息模式快照：Countdown → Done 的转换在服务端 tick 里发生，
+    // 客户端只在能看见时轮询；窗口隐藏（用户切走）时快照刷新也停。
+    void refreshRestSnapshot()
   }, ALERT_TICK_MS)
 }
 
@@ -129,6 +171,15 @@ function stopTicker(): void {
   if (tick === undefined) return
   window.clearInterval(tick)
   tick = undefined
+}
+
+/** 拉一次休息模式快照；失败保持上一次值，避免 UI 闪烁。 */
+async function refreshRestSnapshot(): Promise<void> {
+  try {
+    restSnapshot.value = (await invoke(() => GetRestModeSnapshot(), 'GetRestModeSnapshot')) ?? null
+  } catch (e) {
+    logWarn('读取休息模式快照失败', { err: String(e) })
+  }
 }
 
 /** 按「可见 && 有待处理」决定计时器是否该跑。 */
@@ -209,8 +260,21 @@ async function hideWindow(): Promise<void> {
  *
  * 所有入口（挂载、两个事件、三个按钮、窗口重新可见）都走这里，
  * 才不会出现"A 路径显示、B 路径该隐藏却忘了"这类不对称。
+ *
+ * 优先级：休息模式 > 强提醒开关 > 卡片。
+ * 【为什么休息模式排在最前】stand/move/rest 到点时的引导倒计时本身就是「用户
+ * 明确要看到的动作指引」，与「water 类要不要弹」是两个开关管的两件事；
+ * 让 StrongAlertEnabled=false 关掉休息倒计时会把「起身拉伸」的功能砍掉一半。
  */
 async function syncVisibility(): Promise<void> {
+  await refreshRestSnapshot()
+  if (restActive.value) {
+    // 休息模式覆盖层自带倒计时；pending 也要刷（用于结束后立刻收），
+    // 但不受强提醒开关影响。
+    await refreshPending()
+    await showWindow()
+    return
+  }
   const count = await refreshPending()
   if (count === 0) {
     await hideWindow()
@@ -236,6 +300,34 @@ useEvent(ReminderEvent.Fired, () => {
 // 这时必须收起遮罩，否则用户会面对一张点不掉的空卡片。
 useEvent(ReminderEvent.Changed, () => {
   void syncVisibility()
+})
+
+/**
+ * restmode:completed：服务端 tick 自动完成休息时广播。
+ *
+ * 【为什么需要这条事件】Done→Reset 的过渡在同一秒内跑完，前端 1 秒轮询
+ * 几乎必然错过 Done 状态，用户看到「倒计时归零 → 覆盖层直接消失」没有任何
+ * 「做完了」的反馈（US-11 的可感知承诺落空）。收到这条事件时播一次
+ * `justCompleted` 让 UI 短暂显示「做完了」再收。
+ */
+const justCompleted = ref(false)
+let justCompletedTimer: number | undefined
+useEvent<number>('restmode:completed', () => {
+  justCompleted.value = true
+  if (justCompletedTimer !== undefined) {
+    window.clearTimeout(justCompletedTimer)
+  }
+  justCompletedTimer = window.setTimeout(() => {
+    justCompleted.value = false
+    justCompletedTimer = undefined
+  }, 1500)
+  void syncVisibility()
+})
+
+onUnmounted(() => {
+  if (justCompletedTimer !== undefined) {
+    window.clearTimeout(justCompletedTimer)
+  }
 })
 
 // ---- 交互 ----
@@ -285,6 +377,46 @@ function onSnooze(): void {
 /** 同上：跳过。 */
 function onSkip(): void {
   void act('skip')
+}
+
+// ---- 休息模式：提前结束 / 算完成 / 不算 ----
+
+/** 打开「提前结束」确认对话框。 */
+function askEarlyEnd(): void {
+  showEarlyDialog.value = true
+}
+
+/** 关闭对话框（不做任何打卡动作）。 */
+function dismissEarlyDialog(): void {
+  showEarlyDialog.value = false
+}
+
+/** 用户在对话框点「算完成」：调用 CompleteRestMode。 */
+async function confirmEarlyComplete(): Promise<void> {
+  showEarlyDialog.value = false
+  busy.value = true
+  try {
+    await invoke(() => CompleteRestMode(), 'CompleteRestMode')
+    await syncVisibility()
+  } catch (e) {
+    logWarn('休息模式提前完成失败', { err: String(e) })
+  } finally {
+    busy.value = false
+  }
+}
+
+/** 用户在对话框点「不算」：调用 SkipRestMode。 */
+async function confirmEarlySkip(): Promise<void> {
+  showEarlyDialog.value = false
+  busy.value = true
+  try {
+    await invoke(() => SkipRestMode(), 'SkipRestMode')
+    await syncVisibility()
+  } catch (e) {
+    logWarn('休息模式跳过失败', { err: String(e) })
+  } finally {
+    busy.value = false
+  }
 }
 
 /**
@@ -349,13 +481,49 @@ onUnmounted(() => {
        点空白处就能划掉的话，它退化成了一条不好关的通知。
        关闭只有两个入口：下面三个按钮，或在主窗口里处理掉全部待处理。 -->
   <div class="alert">
-    <section v-if="current" class="alert__card" role="alertdialog" aria-live="assertive">
-      <p v-if="scenario" class="alert__scenario">{{ scenario }}</p>
-      <p v-else-if="current?.is_one_off" class="alert__scenario">一次性提醒</p>
-      <h1 class="alert__title">{{ heading }}</h1>
-      <p v-if="text" class="alert__text">{{ text }}</p>
+    <!-- 休息模式【完成】瞬时反馈：服务端一秒内跑完 Done→Reset，本窗口的 1 秒
+         轮询抓不到；靠 restmode:completed 事件触发这 1.5 秒的「做完了」块。 -->
+    <section
+      v-if="!restActive && justCompleted"
+      class="rest rest--done"
+      role="status"
+      aria-live="polite"
+    >
+      <p class="rest__title">做完了</p>
+      <p class="rest__cue">这一轮休息已记入今日进度。</p>
+    </section>
 
-      <div class="alert__wait">
+    <!-- 休息模式覆盖层：stand/move/rest 到点时展示。倒计时 + 引导动作，
+         「提前结束」是唯一的手动出口（点开后弹二选一）。 -->
+    <section
+      v-else-if="restActive"
+      class="rest"
+      role="dialog"
+      aria-live="assertive"
+      aria-label="休息模式"
+    >
+      <p class="rest__title">{{ restTitle }}</p>
+      <p class="rest__countdown">{{ restRemaining }}</p>
+      <p class="rest__cue">{{ restCue }}</p>
+      <button class="rest__btn" :disabled="busy" @click="askEarlyEnd">提前结束</button>
+    </section>
+
+    <!-- 普通强提醒卡片：water/toilet/custom 或 rest 结束后的下一条待发。 -->
+    <section
+      v-else-if="current"
+      class="alert__card"
+      :class="{ 'alert__card--secondary': !isPrimary }"
+      role="alertdialog"
+      aria-live="assertive"
+    >
+      <!-- 副屏刻意【不显示场景名】：主屏已经展示过；副屏的核心使命是
+           「一眼看到这个提醒 + 一键处理」，越简越好。 -->
+      <p v-if="isPrimary && scenario" class="alert__scenario">{{ scenario }}</p>
+      <p v-else-if="isPrimary && current?.is_one_off" class="alert__scenario">一次性提醒</p>
+      <h1 class="alert__title">{{ heading }}</h1>
+      <p v-if="isPrimary && text" class="alert__text">{{ text }}</p>
+
+      <div v-if="isPrimary" class="alert__wait">
         <span class="alert__wait-dot" aria-hidden="true" />
         <span class="alert__wait-label">已等待</span>
         <span class="alert__wait-value">{{ waited }}</span>
@@ -365,12 +533,28 @@ onUnmounted(() => {
         <button class="alert__btn alert__btn--primary" :disabled="busy" @click="onDone">
           完成
         </button>
-        <button class="alert__btn" :disabled="busy" @click="onSnooze">推迟</button>
-        <button class="alert__btn" :disabled="busy" @click="onSkip">跳过</button>
+        <!-- 副屏不重复显示【推迟 / 跳过】：它们的选择性更强，让用户回到主屏
+             或直接在应用窗口里决定，避免用户在副屏随手点了「跳过」丢了打卡。 -->
+        <button v-if="isPrimary" class="alert__btn" :disabled="busy" @click="onSnooze">推迟</button>
+        <button v-if="isPrimary" class="alert__btn" :disabled="busy" @click="onSkip">跳过</button>
       </div>
 
-      <p v-if="extraCount > 0" class="alert__extra">还有 {{ extraCount }} 条待处理</p>
+      <p v-if="isPrimary && extraCount > 0" class="alert__extra">还有 {{ extraCount }} 条待处理</p>
     </section>
+
+    <!-- 「提前结束」二选一对话框：算完成 = CheckIn(done)；不算 = CheckIn(skip)。
+         刻意不叫「取消」——用户此刻正在离开休息，需要的是「这段算不算」的判断。 -->
+    <div v-if="showEarlyDialog" class="rest__dialog" role="alertdialog" aria-live="assertive">
+      <p class="rest__dialog-title">提前结束这次休息？</p>
+      <p class="rest__dialog-hint">这次算「已完成」还是「跳过」，会决定今日进度的计数。</p>
+      <div class="rest__dialog-actions">
+        <button class="alert__btn alert__btn--primary" :disabled="busy" @click="confirmEarlyComplete">
+          算完成
+        </button>
+        <button class="alert__btn" :disabled="busy" @click="confirmEarlySkip">跳过</button>
+        <button class="alert__btn" :disabled="busy" @click="dismissEarlyDialog">取消</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -548,6 +732,135 @@ onUnmounted(() => {
   50% {
     opacity: 0.35;
     transform: scale(0.82);
+  }
+}
+
+/* ==========================================================================
+   休息模式覆盖层
+   --------------------------------------------------------------------------
+   与普通强提醒卡片不同：这里的核心视觉是【一个大数字】（mm:ss 倒计时），
+   配一句引导动作。刻意不显示【待处理数量 / 场景名 / 完成按钮】——
+   休息期间用户只需要「跟着做」，看到「还有 3 条待处理」会打断状态。
+   ========================================================================== */
+
+.rest {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-6);
+  min-width: 420px;
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-xl);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  animation: alert-rise 260ms var(--ease-out);
+  /* 让 .rest 与 .alert__card 在视觉上分得开：主色边框 + 更淡的背景 */
+  border: 1px solid var(--color-primary-300);
+  color: var(--text-1);
+}
+
+.rest__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* 完成块的瞬时反馈：用 success 令牌色区分「做完了」与普通休息覆盖层 */
+.rest--done {
+  border-color: var(--color-success);
+}
+
+.rest--done .rest__title {
+  color: var(--color-success);
+  font-size: 40px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 倒计时是休息模式的视觉重心：字号最大、主色、tabular-nums 让数字跳动不位移 */
+.rest__countdown {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 72px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-primary);
+}
+
+.rest__cue {
+  margin: 0;
+  max-width: 32em;
+  font-size: var(--font-size-md);
+  line-height: 1.7;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.rest__btn {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  /* 与 alert__btn 同层：--wails-draggable 无继承问题（本窗口没标题栏） */
+}
+
+.rest__btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.rest__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 「提前结束」确认对话框：贴在覆盖层底部，避免整屏切换 */
+.rest__dialog {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-8);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 320px;
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+}
+
+.rest__dialog-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.rest__dialog-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-3);
+}
+
+.rest__dialog-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* 尊重系统「减弱动态效果」：覆盖层入场动画停掉。数字与文案仍是【静态】内容，
+   不属于「无意义的动效」。 */
+@media (prefers-reduced-motion: reduce) {
+  .rest {
+    animation: none;
   }
 }
 </style>

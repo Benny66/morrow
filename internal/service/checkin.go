@@ -314,6 +314,76 @@ func (s *Service) ListPendingFires() ([]PendingFire, error) {
 	return list, nil
 }
 
+// MissedFire 是首页「已错过」分组的一条数据（US-6）。
+//
+// 与 PendingFire 分开是刻意的：错过项【不能】被"完成 / 推迟 / 跳过"——它们没有
+// FireID 意义上的可操作性；只保留「看到过」这一层回执。字段少一半，前端也不
+// 需要给每一行渲染三个按钮。
+type MissedFire struct {
+	// FireID 记录本身的 ID（供去重与埋点，不参与交互）。
+	FireID uint `json:"fire_id"`
+	// ReminderID 提醒项 ID。
+	ReminderID uint `json:"reminder_id"`
+	// ScenarioID 场景 ID（一次性提醒为 0）。
+	ScenarioID uint `json:"scenario_id"`
+	// ScenarioName 场景名。
+	ScenarioName string `json:"scenario_name"`
+	// Title 提醒标题。
+	Title string `json:"title"`
+	// Kind 类型。
+	Kind string `json:"kind"`
+	// IsOneOff 是否为一次性提醒。
+	IsOneOff bool `json:"is_one_off"`
+	// FireAt 计划触发时间（Unix 秒）；UI 显示「09:30 错过了」。
+	FireAt int64 `json:"fire_at"`
+}
+
+// ListMissedToday 返回今日已错过的提醒（暂停期跨过 / 补发窗口挤压导致的 missed 记录）。
+//
+// 【与 US-6 对应】「暂停期间错过的每日单点或一次性提醒按『已错过』保留可见，
+// 不补弹」。引擎在暂停期把这两种情况都 claim 为 FireMissed；本查询把它们捞回来。
+//
+// 【为什么用 strftime 派生 date_key 而不是「算本地今天零点」】model.DateLayout 的
+// 注释把这条铁律讲得很清楚：「用 Unix 时间戳做范围查询意味着每个统计点都要先算
+// 『本地今天零点的时间戳』，而那个值在时区/夏令时变化时极易算错」。SQLite 的
+// `strftime('%Y-%m-%d', fire_at, 'unixepoch', 'localtime')` 与 Go 侧
+// `time.Unix(fire_at, 0).Format(DateLayout)` 语义一致（都跟随进程时区），
+// 且不需要在 reminder_fires 表加 date_key 字段（该字段目前只 CheckIn 有）。
+//
+// 【为什么只看今天】"昨天上午 09:30 有一次舒展没做"对用户已经没有价值；只保留
+// 今天让列表长度有界，避免"用户 3 天没开机 → 首页 300 条已错过"。
+func (s *Service) ListMissedToday() ([]MissedFire, error) {
+	todayKey := s.now().Format(model.DateLayout)
+	rows := make([]pendingFireRow, 0, 8)
+	if err := s.db.Table("reminder_fires AS f").
+		Select(`f.id AS fire_id, f.reminder_id AS reminder_id, f.fire_at AS fire_at,
+			COALESCE(r.scenario_id, 0) AS scenario_id, COALESCE(sc.name, '') AS scenario_name,
+			r.title AS title, r.content AS content, r.kind AS kind,
+			CASE WHEN r.once_at > 0 THEN 1 ELSE 0 END AS is_one_off`).
+		Joins("JOIN reminders AS r ON r.id = f.reminder_id AND r.deleted_at IS NULL").
+		Joins("LEFT JOIN scenarios AS sc ON sc.id = r.scenario_id AND sc.deleted_at IS NULL").
+		Where("f.status = ? AND f.deleted_at IS NULL", model.FireMissed).
+		Where("strftime('%Y-%m-%d', f.fire_at, 'unixepoch', 'localtime') = ?", todayKey).
+		Order("f.fire_at ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, apperr.Wrap(fmt.Errorf("查询已错过提醒失败: %w", err))
+	}
+	list := make([]MissedFire, 0, len(rows))
+	for _, row := range rows {
+		list = append(list, MissedFire{
+			FireID:       row.FireID,
+			ReminderID:   row.ReminderID,
+			ScenarioID:   row.ScenarioID,
+			ScenarioName: row.ScenarioName,
+			Title:        row.Title,
+			Kind:         row.Kind,
+			IsOneOff:     row.IsOneOff,
+			FireAt:       row.FireAt,
+		})
+	}
+	return list, nil
+}
+
 // GetTodayStats 聚合仪表盘所需的今日数据。
 func (s *Service) GetTodayStats() (*TodayStats, error) {
 	now := s.now()

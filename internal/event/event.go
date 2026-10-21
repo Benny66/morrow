@@ -30,6 +30,12 @@ const (
 	// 平移到那条窄边里"是纯视觉问题，只有前端能决定。故后端把窗口移出去之后必须
 	// 把"现在贴在哪个边"告诉前端，否则用户看到的是宠物凭空消失。
 	ActionDock = "dock"
+	// ActionShowPending 菜单栏「查看待处理」入口触发（domain 为 app，US-16）。
+	//
+	// 【为什么单独一个 action 而不是复用 Changed】Changed 的语义是「数据变了，
+	// 前端重新拉」；ShowPending 的语义是「数据没变，但请把 UI 滚到待处理区」。
+	// 混用会让 Home.vue 每次数据刷新都莫名其妙滚一下。
+	ActionShowPending = "show_pending"
 )
 
 // Name 拼装符合约定的事件名（`<domain>:<action>`）。

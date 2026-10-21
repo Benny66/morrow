@@ -18,12 +18,19 @@ package main
 // 建窗本身仍发生在 main.go 的组合根里，本文件只提供选项与几何计算。
 
 import (
+	"strconv"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// alertWindowName 是强提醒窗口在 WindowManager 里的注册名。
-// app.go 的 alertWindow() 按这个名字回查窗口（与 mainWindow/petWindow 同构）。
+// alertWindowName 是主屏强提醒窗口在 WindowManager 里的注册名。
+// app.go 的 allAlertWindows() 按这个名字回查窗口（与 mainWindow/petWindow 同构）。
 const alertWindowName = "alert"
+
+// alertSecondaryNamePrefix 是副屏强提醒窗口的名字前缀，形如 "alert-2" / "alert-3"。
+// 【为什么从 2 开始】主屏叫 "alert"（无后缀）；副屏从 2 编号，视觉上「alert-1」
+// 与「alert」难分。前端根据 label 是否等于 alertWindowName 判 primary。
+const alertSecondaryNamePrefix = "alert-"
 
 // 主屏不可用时的兜底尺寸。
 //
@@ -36,29 +43,65 @@ const (
 	alertFallbackHeight = 800
 )
 
-// alertGeometry 计算强提醒窗口应覆盖的矩形。
+// ScreenRect 是一块屏幕的 WorkArea 全局矩形。
+type ScreenRect struct {
+	X, Y, Width, Height int
+	IsPrimary           bool
+}
+
+// alertGeometries 返回【所有屏幕】的强提醒窗口矩形（US-18 多屏覆盖）。
 //
-// 返回的是【全局逻辑坐标 + 尺寸】，直接喂给 SetPosition/SetSize：
-// 覆盖主屏的 WorkArea（已扣掉菜单栏/Dock/任务栏），而不是整块 Screen——
-// 盖住 Dock 与菜单栏既没意义，也会让用户没法点它们。
+// 每块屏一个 WorkArea（已扣掉菜单栏/Dock/任务栏）——盖住 Dock 与菜单栏既没意义，
+// 也会让用户没法点它们。返回顺序里 primary 一定是第一位，让 main.go 建窗时
+// 第一个窗口能拿到 "alert"（无后缀）的名字。
 //
-// 【为什么不在建窗参数里写 X/Y】WebviewWindowOptions 的 X/Y 是"相对某块屏幕
-// WorkArea 原点"的坐标，而 Position()/SetPosition() 用全局坐标。两者混用正是
-// 上一轮「多屏时宠物被拽回主屏」的成因（详见 pet_window.go 的同名说明）。
-// 故位置统一在窗口创建后用 SetPosition 设置，见 main.go。
-func alertGeometry(app *application.App) (x, y, width, height int) {
+// 【为什么不能只覆盖主屏】用户投双屏时，副屏上正放着的资料/演示完全看不到提醒；
+// 竞品 Stretchly / Time Out 早就把「所有显示器同时被压住」当成基本能力。
+// 只覆盖主屏的旧行为在 ticket 009 前是刻意保守（怕副屏闪烁），现在补上。
+func alertGeometries(app *application.App) []ScreenRect {
 	if app == nil {
-		return 0, 0, alertFallbackWidth, alertFallbackHeight
+		return []ScreenRect{{X: 0, Y: 0, Width: alertFallbackWidth, Height: alertFallbackHeight, IsPrimary: true}}
 	}
+	screens := app.Screen.GetAll()
+	out := make([]ScreenRect, 0, len(screens))
 	primary := app.Screen.GetPrimary()
-	if primary == nil {
+	for _, s := range screens {
+		if s == nil {
+			continue
+		}
+		wa := s.WorkArea
+		if wa.Width <= 0 || wa.Height <= 0 {
+			continue
+		}
+		out = append(out, ScreenRect{
+			X: wa.X, Y: wa.Y, Width: wa.Width, Height: wa.Height,
+			IsPrimary: primary != nil && s.ID == primary.ID,
+		})
+	}
+	if len(out) == 0 {
+		return []ScreenRect{{X: 0, Y: 0, Width: alertFallbackWidth, Height: alertFallbackHeight, IsPrimary: true}}
+	}
+	// primary 顶到第一位：main.go 建窗顺序 = 名字分配顺序。
+	for i := range out {
+		if out[i].IsPrimary && i != 0 {
+			out[0], out[i] = out[i], out[0]
+			break
+		}
+	}
+	return out
+}
+
+// alertGeometry 计算主屏强提醒窗口应覆盖的矩形。
+//
+// 【保留为独立函数】main.go 现在用 alertGeometries 拿全屏列表；本函数给单测
+// 与将来「只要主屏」的调用点留一个稳定入口，内部复用同一套几何规则。
+func alertGeometry(app *application.App) (x, y, width, height int) {
+	rects := alertGeometries(app)
+	if len(rects) == 0 {
 		return 0, 0, alertFallbackWidth, alertFallbackHeight
 	}
-	wa := primary.WorkArea
-	if wa.Width <= 0 || wa.Height <= 0 {
-		return 0, 0, alertFallbackWidth, alertFallbackHeight
-	}
-	return wa.X, wa.Y, wa.Width, wa.Height
+	r := rects[0]
+	return r.X, r.Y, r.Width, r.Height
 }
 
 // alertWindowOptions 组装强提醒窗口的创建参数。
@@ -81,19 +124,27 @@ func alertGeometry(app *application.App) (x, y, width, height int) {
 //
 // 【刻意不设 X/Y，也刻意不给任何元素 --wails-draggable】全屏窗不该被拖动：
 // 位置由 alertGeometry 决定，用户把它拖歪之后没有任何入口能拖回来。
-func alertWindowOptions(width, height int) application.WebviewWindowOptions {
+func alertWindowOptions(name string, width, height int) application.WebviewWindowOptions {
 	if width <= 0 || height <= 0 {
 		width, height = alertFallbackWidth, alertFallbackHeight
 	}
+	if name == "" {
+		name = alertWindowName
+	}
 
 	return application.WebviewWindowOptions{
-		Name:   alertWindowName,
+		Name:   name,
 		Title:  appName,
 		Width:  width,
 		Height: height,
 		// hash 路由 + meta.bare：与主窗共用同一份前端产物，该路由跳过 AppShell
 		// （否则全屏窗里会画出侧栏与标题栏，遮罩也就不透明了）。
-		URL:              "/#/alert",
+		// 【?p=1 的用途】Alert.vue 通过 URL query 判自己是 primary 还是副屏：
+		//   primary 显示完整卡片 + 完成/推迟/跳过三按钮（US-19）；
+		//   副屏显示简化卡片（标题 + 完成），保证用户在任一副屏都能立刻处理。
+		// 【用 query 而不是 window label】label 是 Go 侧的内部标识，暴露给前端会
+		// 让"命名规则"变成第二处真相；query 是一次性的、语义明确的字符串。
+		URL:              "/#/alert?p=" + alertPrimaryFlag(name),
 		Frameless:        true,
 		AlwaysOnTop:      true,
 		DisableResize:    true,
@@ -106,4 +157,17 @@ func alertWindowOptions(width, height int) application.WebviewWindowOptions {
 		},
 		Windows: application.WindowsWindow{Theme: application.SystemDefault},
 	}
+}
+
+// alertPrimaryFlag 由窗口名派生 URL 上的 primary 标记：主屏 = "1"，副屏 = "0"。
+func alertPrimaryFlag(name string) string {
+	if name == alertWindowName {
+		return "1"
+	}
+	return "0"
+}
+
+// AlertSecondaryName 供 main.go 拼副屏窗口名（"alert-2" / "alert-3" ...）。
+func AlertSecondaryName(idx int) string {
+	return alertSecondaryNamePrefix + strconv.Itoa(idx)
 }

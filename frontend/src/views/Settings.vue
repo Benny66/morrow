@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAppStore } from '../stores/app'
 // v3 的绑定路径见 stores/app.ts 的说明。
@@ -12,6 +12,7 @@ import {
   GetClipboardText,
   GetDataDir,
   GetMCPToken,
+  GetPauseSettings,
   GetPetSettings,
   GetReminderSettings,
   GetToggleWindowShortcut,
@@ -19,7 +20,11 @@ import {
   ImportPetPack,
   ListPetPacks,
   OpenDataDir,
+  OpenPrivacySettings,
+  RequestCalendarAccess,
   RequestNotificationPermission,
+  RequestFocusAccess,
+  RequestScreenCapture,
   RotateMCPToken,
   SelectFile,
   SelectSaveFile,
@@ -27,6 +32,7 @@ import {
   SetAISettings,
   SetAutostart,
   SetClipboardText,
+  SetPauseSettings,
   SetPetSettings,
   SetReminderSettings,
   SetToggleWindowShortcut,
@@ -94,6 +100,42 @@ const petScale = ref(1)
 const petPackID = ref('builtin')
 const petHint = ref('')
 const petImporting = ref(false)
+
+// ---- 智能免打扰 ----
+const idleEnabled = ref(true)
+const lockEnabled = ref(true)
+const meetingEnabled = ref(true)
+const fullscreenEnabled = ref(false)
+const idleMinutes = ref(5)
+// 权限状态：只读回显；Windows/Linux 上 granted 恒 true 且 needsPermission 恒 false。
+const screenGranted = ref(true)
+const screenAsked = ref(false)
+const platformNeedsPermission = ref(false)
+// P1 敏感信号：专注与日历；默认关闭 + 显式开启 + 拒绝降级（ADR 0005）。
+const focusEnabled = ref(false)
+const focusGranted = ref(false)
+const focusAsked = ref(false)
+const focusSupported = ref(false)
+// Denied 由后端算好：Granted=false && Asked=true && Supported=true 三条同时成立。
+// 前端不再自己拼这三个布尔，避免语义漂移（见 pause/authorization.go）。
+const focusDenied = ref(false)
+const calendarEnabled = ref(false)
+const calendarGranted = ref(false)
+const calendarAsked = ref(false)
+const calendarSupported = ref(false)
+const calendarDenied = ref(false)
+const pauseHint = ref('')
+const pauseSaving = ref(false)
+/**
+ * 「刚在系统设置里授权完」的提示（US-25 的收尾）。
+ *
+ * 屏幕录制权限在部分 macOS 版本上要重启应用才真正生效；专注/日历通常即时生效。
+ * 这里用「本次会话里从 false 变 true」判「是不是刚授权的」，只在那一刻提示一次，
+ * 避免用户每次打开设置页都看到一句没头没尾的重启建议。
+ */
+const screenJustGranted = ref(false)
+const focusJustGranted = ref(false)
+const calendarJustGranted = ref(false)
 
 /** 默认导出文件名：带日期，避免用户多次导出互相覆盖。 */
 function defaultBackupName(): string {
@@ -408,6 +450,173 @@ async function importPetPack() {
   }
 }
 
+// ---- 智能免打扰 ----
+
+/** 读取智能免打扰设置与屏幕录制权限状态。 */
+async function refreshPauseSettings() {
+  try {
+    const current = await invoke(() => GetPauseSettings(), 'GetPauseSettings')
+    // 依次对比「上一次」与「这一次」的授权状态，标记「刚授权」用于重启提示。
+    // 放在赋值之前：赋值之后就看不到旧值了。
+    if (!screenGranted.value && current.screen_recording_granted) {
+      screenJustGranted.value = true
+    }
+    if (!focusGranted.value && current.focus_granted) {
+      focusJustGranted.value = true
+    }
+    if (!calendarGranted.value && current.calendar_granted) {
+      calendarJustGranted.value = true
+    }
+    idleEnabled.value = current.idle_enabled
+    lockEnabled.value = current.lock_enabled
+    meetingEnabled.value = current.meeting_enabled
+    fullscreenEnabled.value = current.fullscreen_enabled
+    focusEnabled.value = current.focus_enabled
+    calendarEnabled.value = current.calendar_enabled
+    idleMinutes.value = current.idle_minutes
+    screenGranted.value = current.screen_recording_granted
+    screenAsked.value = current.screen_recording_asked
+    platformNeedsPermission.value = current.platform_needs_permission
+    focusGranted.value = current.focus_granted
+    focusAsked.value = current.focus_asked
+    focusSupported.value = current.focus_supported
+    focusDenied.value = current.focus_denied
+    calendarGranted.value = current.calendar_granted
+    calendarAsked.value = current.calendar_asked
+    calendarSupported.value = current.calendar_supported
+    calendarDenied.value = current.calendar_denied
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+}
+
+// ---- 权限直达系统设置 ----
+
+/** 三个可直达的隐私面板（与 internal/systemprefs.Pane 的字符串取值一致）。 */
+type PrivacyPane = 'screen_recording' | 'focus' | 'calendar'
+
+/** 深链失败时的文字兜底路径（与「去系统设置」按钮成对出现）。 */
+function privacyFallback(pane: PrivacyPane): string {
+  const name = pane === 'screen_recording' ? '屏幕录制' : pane === 'focus' ? '专注' : '日历'
+  return `无法自动打开系统设置，请手动进入 系统设置 → 隐私与安全 → ${name}`
+}
+
+/**
+ * 「去系统设置」按钮。
+ *
+ * 【按状态分两步】macOS 的隐私面板里，应用只有至少调用过一次申请 API 才会出现。
+ * 所以：从未问过 → 先走一次说明窗 + 系统弹窗（让 Morrow 出现在列表里）；
+ * 问过（被拒）→ 直接打开对应面板。这样不会出现「系统弹窗和设置页同时出来」。
+ */
+async function gotoSystemSettings(pane: PrivacyPane): Promise<void> {
+  actionError.value = null
+  pauseHint.value = ''
+  try {
+    // 第一步：从未问过 → 只走申请，不跳设置页。
+    if (pane === 'screen_recording' && !screenAsked.value) {
+      await invoke(() => RequestScreenCapture(), 'RequestScreenCapture')
+      await refreshPauseSettings()
+      return
+    }
+    if (pane === 'focus' && !focusAsked.value) {
+      await invoke(() => RequestFocusAccess(), 'RequestFocusAccess')
+      await refreshPauseSettings()
+      return
+    }
+    if (pane === 'calendar' && !calendarAsked.value) {
+      await invoke(() => RequestCalendarAccess(), 'RequestCalendarAccess')
+      await refreshPauseSettings()
+      return
+    }
+    // 第二步：问过 → 直接跳面板。
+    await invoke(() => OpenPrivacySettings(pane), 'OpenPrivacySettings')
+  } catch {
+    // 深链失败（老系统/被策略禁用）：给文字路径，用户不会卡在无反应上。
+    pauseHint.value = privacyFallback(pane)
+  }
+}
+
+/**
+ * 从系统设置切回本应用时刷新一次权限状态。
+ *
+ * 【为什么用 window focus 而不是定时轮询】用户去系统设置授权完，回来第一件事
+ * 就是切窗口；此刻刷新一次即可，没必要在设置页常驻一个定时器白烧电。
+ * 「刚授权」的提示由 refreshPauseSettings 里的前后对比置位。
+ */
+function onWindowFocus(): void {
+  void refreshPauseSettings()
+}
+
+/**
+ * 保存智能免打扰设置。
+ *
+ * 【如果用户勾了 fullscreen 但还没权限，先触发一次申请流程】这是 ADR 0005 说的
+ * 「显式开启并授权」的落地：只有用户点过开关才弹窗，而不是首次启动就冲上来问。
+ * 保存本身与申请分开走：申请被拒也不阻止保存——config 里 flag=true + 未授权，
+ * pause 层的 FullscreenDetector 会自动降级（不暂停），下次页面刷新会看到
+ * 「未授予」的提示。
+ */
+async function savePauseSettings() {
+  actionError.value = null
+  pauseHint.value = ''
+  pauseSaving.value = true
+  try {
+    // 顺序：申请 → 保存 → 回读。反过来的话，用户拒了权限也已经落库了，
+    // UI 会短暂显示「已开启」然后又退回「未授予」。
+    //
+    // 【hint 累加而不是独占】用户可能同时勾了 3 个 P1 敏感权限，一次拒绝
+    // 就应该看到全部三项的降级提示；独占会让用户以为「只有一路出问题」，
+    // 保存后才发现另外两路也降级了。
+    const failed: string[] = []
+    if (fullscreenEnabled.value && platformNeedsPermission.value && !screenGranted.value) {
+      const granted = await invoke(() => RequestScreenCapture(), 'RequestScreenCapture')
+      if (!granted) failed.push('全屏')
+    }
+    if (focusEnabled.value && focusSupported.value && !focusGranted.value) {
+      const granted = await invoke(() => RequestFocusAccess(), 'RequestFocusAccess')
+      if (!granted) failed.push('专注')
+    }
+    if (calendarEnabled.value && calendarSupported.value && !calendarGranted.value) {
+      const granted = await invoke(() => RequestCalendarAccess(), 'RequestCalendarAccess')
+      if (!granted) failed.push('日历')
+    }
+    const message = await invoke(
+      () =>
+        SetPauseSettings({
+          idle_enabled: idleEnabled.value,
+          lock_enabled: lockEnabled.value,
+          meeting_enabled: meetingEnabled.value,
+          fullscreen_enabled: fullscreenEnabled.value,
+          focus_enabled: focusEnabled.value,
+          calendar_enabled: calendarEnabled.value,
+          idle_minutes: idleMinutes.value,
+          screen_recording_granted: screenGranted.value,
+          screen_recording_asked: screenAsked.value,
+          platform_needs_permission: platformNeedsPermission.value,
+          focus_granted: focusGranted.value,
+          focus_asked: focusAsked.value,
+          focus_supported: focusSupported.value,
+          focus_denied: focusDenied.value,
+          calendar_granted: calendarGranted.value,
+          calendar_asked: calendarAsked.value,
+          calendar_supported: calendarSupported.value,
+          calendar_denied: calendarDenied.value,
+        }),
+      'SetPauseSettings',
+    )
+    if (failed.length > 0) {
+      pauseHint.value = `未获得【${failed.join(' / ')}】权限，对应信号会静默降级；其余开关已保存`
+    } else {
+      pauseHint.value = message || '已保存'
+    }
+    await refreshPauseSettings()
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    pauseSaving.value = false
+  }
+}
+
 // 双保险：AppInfo 已含数据目录，若它整条拿不到（极端情况），退回单独查。
 // 顺带拉起各设置项的初始状态。
 onMounted(async () => {
@@ -435,6 +644,13 @@ onMounted(async () => {
   await refreshAISettings()
   await refreshReminderSettings()
   await refreshPet()
+  await refreshPauseSettings()
+  // 从系统设置切回来时刷新权限状态（见 onWindowFocus 的说明）。
+  window.addEventListener('focus', onWindowFocus)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('focus', onWindowFocus)
 })
 </script>
 
@@ -633,6 +849,132 @@ onMounted(async () => {
         {{ reminderSaving ? '保存中…' : '保存提醒设置' }}
       </button>
       <span v-if="reminderHint" class="setting__muted">{{ reminderHint }}</span>
+    </div>
+
+    <h2 class="setting__section">智能免打扰</h2>
+
+    <p class="setting__note">
+      离开、锁屏、开会或全屏时自动暂停投递；恢复后按原间隔重新计时，<strong>不补发</strong>。
+      各项独立开关；数据只在本机判定，不落盘、不上传（详见 ADR 0004）。
+    </p>
+
+    <div class="setting">
+      <span class="setting__label">空闲暂停</span>
+      <el-switch v-model="idleEnabled" />
+      <span class="setting__muted">连续一段时间无键鼠输入时暂停</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">空闲阈值</span>
+      <el-select v-model="idleMinutes" class="setting__select" size="small">
+        <el-option :value="3" label="3 分钟" />
+        <el-option :value="5" label="5 分钟" />
+        <el-option :value="10" label="10 分钟" />
+      </el-select>
+      <span class="setting__muted">多久不动算「离开座位」</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">锁屏暂停</span>
+      <el-switch v-model="lockEnabled" />
+      <span class="setting__muted">屏幕锁定或系统休眠时暂停；唤醒/解锁后恢复</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">会议暂停</span>
+      <el-switch v-model="meetingEnabled" />
+      <span class="setting__muted">
+        前台为 Zoom/Teams/Webex/腾讯会议/飞书/钉钉/FaceTime 时暂停；不读取会议内容
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">全屏暂停</span>
+      <el-switch v-model="fullscreenEnabled" />
+      <span class="setting__muted">前台窗口铺满当前屏幕时暂停（看视频/演示/投屏）</span>
+    </div>
+
+    <div v-if="platformNeedsPermission && fullscreenEnabled && !screenGranted" class="setting">
+      <span class="setting__label">屏幕录制权限</span>
+      <el-tag v-if="screenAsked" type="warning" size="small">未授予</el-tag>
+      <el-tag v-else type="info" size="small">等待授权</el-tag>
+      <button class="setting__btn" @click="gotoSystemSettings('screen_recording')">
+        去系统设置
+      </button>
+      <span class="setting__muted">
+        Morrow 只读窗口位置与尺寸判定全屏，不截图、不录屏、不读取窗口标题。
+        <template v-if="screenAsked">
+          点「去系统设置」直达「隐私与安全 → 屏幕录制」。
+        </template>
+        <template v-else>点「去系统设置」会先弹出说明与系统授权窗。</template>
+      </span>
+    </div>
+
+    <!-- 刚在系统设置里授权完：屏幕录制在部分 macOS 版本上要重启应用才真正生效。 -->
+    <div v-if="screenJustGranted" class="setting">
+      <span class="setting__label"></span>
+      <el-tag type="success" size="small">已授权</el-tag>
+      <span class="setting__muted">
+        屏幕录制权限已获取。若全屏检测仍未生效，请重启 Morrow。
+      </span>
+    </div>
+
+    <div v-if="focusSupported" class="setting">
+      <span class="setting__label">专注联动</span>
+      <el-switch v-model="focusEnabled" />
+      <span class="setting__muted">macOS 系统专注模式开启时暂停；关闭后恢复</span>
+      <el-tag v-if="focusEnabled && focusDenied" type="warning" size="small">已降级</el-tag>
+      <el-tag v-else-if="focusEnabled && !focusGranted" type="info" size="small">等待授权</el-tag>
+      <el-tag v-else-if="focusEnabled && focusGranted" type="success" size="small">已授权</el-tag>
+      <button
+        v-if="focusEnabled && !focusGranted"
+        class="setting__btn"
+        @click="gotoSystemSettings('focus')"
+      >
+        去系统设置
+      </button>
+    </div>
+
+    <div v-if="focusEnabled && focusDenied" class="setting">
+      <span class="setting__label"></span>
+      <span class="setting__muted">
+        系统专注读取被拒绝，专注信号会静默缺席；其余信号仍工作。
+      </span>
+    </div>
+
+    <div v-if="calendarSupported" class="setting">
+      <span class="setting__label">日历感知</span>
+      <el-switch v-model="calendarEnabled" />
+      <span class="setting__muted">当前落在日历忙碌时段时暂停；只读忙闲，不读事件内容</span>
+      <el-tag v-if="calendarEnabled && calendarDenied" type="warning" size="small">已降级</el-tag>
+      <el-tag v-else-if="calendarEnabled && !calendarGranted" type="info" size="small">
+        等待授权
+      </el-tag>
+      <el-tag v-else-if="calendarEnabled && calendarGranted" type="success" size="small">
+        已授权
+      </el-tag>
+      <button
+        v-if="calendarEnabled && !calendarGranted"
+        class="setting__btn"
+        @click="gotoSystemSettings('calendar')"
+      >
+        去系统设置
+      </button>
+    </div>
+
+    <div v-if="calendarEnabled && calendarDenied" class="setting">
+      <span class="setting__label"></span>
+      <span class="setting__muted">
+        日历读取被拒绝，日历信号会静默缺席。
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label"></span>
+      <button class="setting__btn" :disabled="pauseSaving" @click="savePauseSettings">
+        {{ pauseSaving ? '保存中…' : '保存免打扰设置' }}
+      </button>
+      <span v-if="pauseHint" class="setting__muted">{{ pauseHint }}</span>
     </div>
 
     <h2 class="setting__section">桌面宠物</h2>

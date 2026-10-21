@@ -51,6 +51,8 @@ export const EventAction = {
   Changed: 'changed',
   /** 桌面宠物贴边收起 / 展开（domain 为 pet）。 */
   Dock: 'dock',
+  /** 菜单栏「查看待处理」入口触发（domain 为 app，US-16）。 */
+  ShowPending: 'show_pending',
 } as const
 
 /** 事件动作取值。 */

@@ -16,9 +16,11 @@ import {
   CollapsePet,
   CompleteReminder,
   ExpandPet,
+  GetPauseState,
   GetPetGrowth,
   GetPetSettings,
   GetPetSprite,
+  GetRestModeSnapshot,
   ListPendingFires,
   OpenMainWindow,
   SnoozeReminder,
@@ -26,6 +28,7 @@ import {
 import { invoke } from '../lib/invoke'
 import { useEvent } from '../composables/useEvent'
 import { ReminderEvent, type ReminderFiredPayload } from '../lib/reminder'
+import { State as RestModeState, type Snapshot as RestModeSnapshot } from '../../bindings/morrow/internal/restmode/models.js'
 import { logInfo, logWarn } from '../lib/log'
 import {
   FRAME_H,
@@ -72,6 +75,25 @@ const anim = ref<PetAnimValue>(PetAnim.Idle)
  * 初值 0：首启尚未拉到数据时显示健康小苗；读取失败时保持上一次值，不闪回。
  */
 const growth = ref<GrowthStage>(0)
+
+// ---- 暂停状态 ----
+
+/** 是否处于暂停状态（智能免打扰）。 */
+const paused = ref(false)
+/** 暂停原因（idle/lock/meeting/fullscreen/focus/calendar；空串表示未暂停）。 */
+const pauseReason = ref('')
+
+// ---- 休息模式状态 ----
+
+/**
+ * 休息模式快照。
+ *
+ * 三种可见状态在宠物上分别对应：
+ *   - warning：气泡「1 分钟后该起身拉伸了」（US-9）
+ *   - countdown：宠物切到「陪做」姿态 + 气泡「陪你休息」+ 剩余秒数（US-27）
+ *   - 其他（idle/done/skipped）：宠物不介入，走原有 pending 通道
+ */
+const restSnap = ref<RestModeSnapshot | null>(null)
 
 // ---- 气泡状态 ----
 
@@ -194,6 +216,38 @@ const currentFireID = ref(0)
 
 /** 气泡标题的兜底文案：提醒本身没标题时不至于出现一个空气泡。 */
 const bubbleHeading = computed(() => bubbleTitle.value || '该起来动一下了')
+
+/** 是否显示暂停气泡：暂停时显示「我先不打扰」。 */
+const pauseBubbleVisible = computed(() => paused.value)
+
+/** 是否显示休息模式预警气泡（Warning 状态优先于普通待处理气泡）。 */
+const restWarningVisible = computed(() => restSnap.value?.state === RestModeState.StateWarning)
+const restWarningText = computed(() => restSnap.value?.cue_text ?? '')
+
+/** 是否处于休息模式陪做状态（Countdown）。 */
+const restAccompanying = computed(() => restSnap.value?.state === RestModeState.StateCountdown)
+const restAccompanyingText = computed(() => {
+  const s = restSnap.value
+  if (!s) return ''
+  const m = Math.floor(s.remaining_sec / 60)
+  const sec = s.remaining_sec % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `陪你休息 ${pad(m)}:${pad(sec)}`
+})
+
+/** 暂停气泡的文案：根据暂停原因显示不同的提示。 */
+const pauseBubbleText = computed(() => {
+  if (!paused.value) return ''
+  const reasonMap: Record<string, string> = {
+    idle: '你好像离开了，我先不打扰',
+    lock: '屏幕已锁定，我先不打扰',
+    meeting: '检测到会议应用，我先不打扰',
+    fullscreen: '检测到全屏应用，我先不打扰',
+    focus: '系统专注模式已开启，我先不打扰',
+    calendar: '日历显示你正忙，我先不打扰',
+  }
+  return reasonMap[pauseReason.value] || '我先不打扰'
+})
 
 // ---- 图集绘制 ----
 
@@ -389,6 +443,37 @@ async function syncGrowth(): Promise<void> {
   } catch (e) {
     // 读不到时保持上一次形态：宠物窗口没有 DevTools，静默降级优于报错。
     logWarn('读取芽生长档位失败', { err: String(e) })
+  }
+}
+
+/**
+ * 拉取并应用暂停状态（4 秒轮询）。
+ *
+ * 暂停时显示「我先不打扰」气泡；恢复后收起气泡。
+ * 失败时保持上一次值，不闪回、不报错。
+ */
+async function syncPauseState(): Promise<void> {
+  try {
+    const result = await invoke(() => GetPauseState(), 'GetPauseState')
+    paused.value = result?.paused ?? false
+    pauseReason.value = result?.reason ?? ''
+  } catch (e) {
+    // 读不到时保持上一次状态：静默降级优于报错。
+    logWarn('读取暂停状态失败', { err: String(e) })
+  }
+}
+
+/**
+ * 拉取并应用休息模式快照（4 秒轮询）。
+ *
+ * Warning → 气泡显示预警文案；Countdown → 宠物切「陪做」姿态并显示 mm:ss；
+ * 其他状态一律收起休息气泡，走原有 pending/pause 通道。
+ */
+async function syncRestModeState(): Promise<void> {
+  try {
+    restSnap.value = (await invoke(() => GetRestModeSnapshot(), 'GetRestModeSnapshot')) ?? null
+  } catch (e) {
+    logWarn('读取休息模式快照失败', { err: String(e) })
   }
 }
 
@@ -651,15 +736,18 @@ async function syncSettings(): Promise<void> {
   }
 }
 
-/** 轮询设置与生长档位（失败只记一条 warn，下一轮再试）。 */
+/** 轮询设置、生长档位、暂停状态与休息模式（失败只记一条 warn，下一轮再试）。 */
 async function pollSettings(): Promise<void> {
   try {
     await syncSettings()
   } catch (e) {
     logWarn('同步宠物设置失败', { err: String(e) })
   }
-  // 生长档位并入同一次 4 秒轮询：兜住「次日翻篇」这类没有打卡事件的情况。
+  // 生长档位、暂停状态、休息模式并入同一次 4 秒轮询：兜住「次日翻篇」这类没有
+  // 打卡事件的情况。休息模式的预警与倒计时都靠这个通道刷新。
   await syncGrowth()
+  await syncPauseState()
+  await syncRestModeState()
 }
 
 // ---- 生命周期 ----
@@ -733,6 +821,22 @@ onUnmounted(() => {
     @mouseenter="onPetEnter"
     @mouseleave="onPetLeave"
   >
+    <!-- 休息模式陪做气泡（Countdown）：宠物与 Alert 覆盖层同步的锚点，用户
+         不看覆盖层也能余光扫到还剩多久。优先级最高——此刻用户正在【做】这件事。 -->
+    <div v-if="restAccompanying" class="bubble bubble--rest">
+      <p class="bubble__title">{{ restAccompanyingText }}</p>
+    </div>
+
+    <!-- 休息模式预警气泡（Warning）：到点前 60 秒的软提示，不发系统通知。 -->
+    <div v-else-if="restWarningVisible" class="bubble bubble--warning">
+      <p class="bubble__title">{{ restWarningText }}</p>
+    </div>
+
+    <!-- 暂停气泡：智能免打扰期间显示「我先不打扰」。 -->
+    <div v-else-if="pauseBubbleVisible" class="bubble bubble--pause">
+      <p class="bubble__title">{{ pauseBubbleText }}</p>
+    </div>
+
     <!-- 气泡：只有待处理提醒时才出现。按钮直接作用于第一条提醒，
          让用户不必打开主窗口就能处理。 -->
     <div v-if="bubbleVisible" class="bubble">
@@ -854,6 +958,30 @@ onUnmounted(() => {
   /* 气泡是点击区，必须显式排除拖拽：--wails-draggable 会从 .pet 继承下来，
      不覆盖的话点它只会拖动窗口，OpenMainWindow 永远等不到点击。 */
   --wails-draggable: no-drag;
+}
+
+/* 暂停气泡：使用次要色调，表达「我不打扰你」的温和感。 */
+.bubble--pause {
+  background: var(--bg-subtle);
+  border-color: var(--border-subtle);
+  opacity: 0.85;
+}
+
+/* 预警气泡（Warning）：稍亮的边框但不抢主色——是「提醒」而不是「指令」。 */
+.bubble--warning {
+  background: var(--bg-raised);
+  border-color: var(--color-primary-300);
+}
+
+/* 陪做气泡（Countdown）：与休息模式覆盖层同色系（品牌主色），文字用 tabular-nums
+   避免 mm:ss 跳动时视觉位移。 */
+.bubble--rest {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+
+.bubble--rest .bubble__title {
+  font-variant-numeric: tabular-nums;
 }
 
 /* 气泡尾巴：旋转 45° 的小方块，只留右下两条边，看起来像从气泡长出来的 */

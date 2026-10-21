@@ -128,3 +128,93 @@ func TestSaveUsesSnakeCaseTags(t *testing.T) {
 		}
 	}
 }
+
+// TestClampIdleMinutes 空闲阈值 MUST 夹到 3/5/10 三档中最接近的一档。
+//
+// 【为什么单独测】clampIdleMinutes 是设置页下拉之外的第二道防线（用户手改 config.json），
+// 逻辑错会让 4 归 5 或 8 归 5 这类偏差出现，直接影响暂停灵敏度。
+func TestClampIdleMinutes(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{-100, 3},
+		{0, 3},
+		{2, 3},
+		{3, 3},
+		{4, 3}, // 与 5 差 1、与 3 差 1；并列取更保守的 3
+		{5, 5},
+		{6, 5},
+		{7, 5},
+		{8, 10}, // 与 10 差 2、与 5 差 3
+		{9, 10},
+		{10, 10},
+		{999, 10},
+	}
+	for _, c := range cases {
+		if got := clampIdleMinutes(c.in); got != c.want {
+			t.Errorf("clampIdleMinutes(%d) = %d，期望 %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestPauseIdleMinutesValueUsesClamp 保证 PauseIdleMinutesValue 的合法范围与
+// clampIdleMinutes 一致（3/5/10 三档之外都回落到 DefaultPauseIdleMinutes=5）。
+func TestPauseIdleMinutesValueUsesClamp(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"3 档保留", 3, 3},
+		{"5 档保留", 5, 5},
+		{"10 档保留", 10, 10},
+		{"越界回落到默认 5", 30, DefaultPauseIdleMinutes},
+		{"负值回落到默认 5", -1, DefaultPauseIdleMinutes},
+		{"4 是合法范围但非档位：保留原值", 4, 4}, // PauseIdleMinutesValue 只夹范围不夹档位
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := &Config{PauseIdleMinutes: c.in}
+			if got := cfg.PauseIdleMinutesValue(); got != c.want {
+				t.Errorf("PauseIdleMinutesValue(%d) = %d，期望 %d", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestSavePauseSettingsPersistsFlags 保存后 4 个 flag MUST 都能落盘。
+func TestSavePauseSettingsPersistsFlags(t *testing.T) {
+	isolateHome(t)
+	cfg := Default()
+	cfg.path = filepath.Join(t.TempDir(), "config.json")
+	in := PauseSettings{
+		IdleEnabled:       false,
+		LockEnabled:       true,
+		MeetingEnabled:    false,
+		FullscreenEnabled: true,
+		IdleMinutes:       10,
+	}
+	if err := cfg.SavePauseSettings(in); err != nil {
+		t.Fatalf("SavePauseSettings 失败: %v", err)
+	}
+	if cfg.PauseIdleEnabled || !cfg.PauseLockEnabled || cfg.PauseMeetingEnabled || !cfg.PauseFullscreenEnabled {
+		t.Errorf("4 个开关未按预期落盘：%+v", cfg)
+	}
+	if cfg.PauseIdleMinutes != 10 {
+		t.Errorf("PauseIdleMinutes 应为 10，实际 %d", cfg.PauseIdleMinutes)
+	}
+}
+
+// TestSavePauseSettingsClampsIdleMinutes 非法阈值 MUST 被夹到合法档位（不报错）。
+func TestSavePauseSettingsClampsIdleMinutes(t *testing.T) {
+	isolateHome(t)
+	cfg := Default()
+	cfg.path = filepath.Join(t.TempDir(), "config.json")
+	if err := cfg.SavePauseSettings(PauseSettings{IdleMinutes: 8}); err != nil {
+		t.Fatalf("SavePauseSettings 失败: %v", err)
+	}
+	if cfg.PauseIdleMinutes != 10 {
+		t.Errorf("IdleMinutes=8 应被夹到最近档位 10，实际 %d", cfg.PauseIdleMinutes)
+	}
+}

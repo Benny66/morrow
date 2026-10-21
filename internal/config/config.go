@@ -44,6 +44,14 @@ const (
 	MinSnoozeMinutes = 1
 	// MaxSnoozeMinutes 见 MinSnoozeMinutes。
 	MaxSnoozeMinutes = 120
+
+	// DefaultPauseIdleMinutes 默认空闲判定阈值（5 分钟）。
+	// 健康提醒的价值在于"别在离开时打扰"，5 分钟是"去倒杯水/上个洗手间"的典型时长。
+	DefaultPauseIdleMinutes = 5
+	// MinPauseIdleMinutes / MaxPauseIdleMinutes 空闲阈值的合法范围。
+	MinPauseIdleMinutes = 3
+	// MaxPauseIdleMinutes 见 MinPauseIdleMinutes。
+	MaxPauseIdleMinutes = 10
 )
 
 // 桌面宠物的默认值与合法范围。
@@ -125,6 +133,51 @@ type Config struct {
 	// 关闭后提醒仍然记录、仍然进待处理卡片——只是不再占屏。
 	StrongAlertEnabled bool `json:"strong_alert_enabled"`
 
+	// PauseIdleEnabled 是否启用空闲暂停（连续 N 分钟无键鼠输入时自动暂停提醒）。
+	// 默认开启：这是「智能免打扰」的核心能力，关掉等于回到"到点就响"的原始模式。
+	PauseIdleEnabled bool `json:"pause_idle_enabled"`
+
+	// PauseIdleMinutes 空闲判定的阈值分钟数（默认 5 分钟）。
+	// 合法范围：3/5/10 分钟；越界回落默认值。
+	PauseIdleMinutes int `json:"pause_idle_minutes"`
+
+	// PauseLockEnabled 是否启用锁屏/休眠暂停（屏幕锁定或系统休眠时自动暂停提醒）。
+	// 默认开启：与空闲一样属于「智能免打扰」的核心能力。
+	PauseLockEnabled bool `json:"pause_lock_enabled"`
+
+	// PauseMeetingEnabled 是否启用会议应用前台暂停（Zoom/Teams/飞书等在前台时暂停）。
+	// 默认开启：这是「智能免打扰」里最贴近用户痛点的信号——开会时被弹窗打扰
+	// 是竞品分析里反馈最集中的一条。
+	PauseMeetingEnabled bool `json:"pause_meeting_enabled"`
+
+	// PauseFullscreenEnabled 是否启用全屏窗口暂停（前台窗口铺满当前屏幕时暂停）。
+	//
+	// 与空闲/锁屏/会议不同，这一项默认【关闭】：macOS 上首次开启会弹屏幕录制权限
+	// 请求，用户没准备好被问权限时默认开着会被视为「装完就要我问权限」的侵略感。
+	// ADR 0005 的「默认关闭、显式开启」同样适用这一项。
+	PauseFullscreenEnabled bool `json:"pause_fullscreen_enabled"`
+
+	// ScreenRecordingPermissionAsked 记录是否【已经问过】屏幕录制授权。
+	//
+	// 【为什么需要这个字段】macOS 上第二次调用 CGRequestScreenCaptureAccess 不再弹原生
+	// 授权窗，只会跳到系统设置页；用户拒绝过一次后如果每次开关都触发，体验非常差。
+	// 这个字段一旦为 true，UI 层就不再弹说明窗，只提示「请到系统设置里手动开启」。
+	ScreenRecordingPermissionAsked bool `json:"screen_recording_permission_asked"`
+
+	// PauseFocusEnabled 是否启用系统专注联动（macOS INFocusStatusCenter）。
+	// 默认关闭：P1 敏感权限（ADR 0005）。开启时会走一次授权说明窗。
+	PauseFocusEnabled bool `json:"pause_focus_enabled"`
+
+	// FocusAskedBefore 记录是否【已经问过】专注状态授权；拒绝后不再弹。
+	FocusAskedBefore bool `json:"focus_asked_before"`
+
+	// PauseCalendarEnabled 是否启用日历忙闲感知（macOS EventKit）。
+	// 默认关闭：P1 敏感权限（ADR 0005）。
+	PauseCalendarEnabled bool `json:"pause_calendar_enabled"`
+
+	// CalendarAskedBefore 记录是否【已经问过】日历授权；拒绝后不再弹。
+	CalendarAskedBefore bool `json:"calendar_asked_before"`
+
 	// PetVisible 是否显示桌面宠物窗口。关掉只是隐藏窗口，宠物包与其它配置照旧保留。
 	PetVisible bool `json:"pet_visible"`
 	// PetX / PetY 宠物窗口上次所在的位置（0 表示未记录，此时用 DefaultPetX/Y）。
@@ -159,6 +212,16 @@ func Default() *Config {
 		// 强提醒默认开着：本项的立项理由就是「通知太容易被忽略」，
 		// 默认关掉等于新用户第一次到点仍然什么都看不见（等于没做这个功能）。
 		StrongAlertEnabled: true,
+		// 空闲暂停默认开着：这是「智能免打扰」的核心能力，关掉等于回到"到点就响"的原始模式。
+		PauseIdleEnabled: true,
+		// 空闲阈值默认 5 分钟：去倒杯水/上个洗手间的典型时长。
+		PauseIdleMinutes: DefaultPauseIdleMinutes,
+		// 锁屏/休眠暂停默认开着：屏幕都关了，弹提醒只是给下一位用户添乱。
+		PauseLockEnabled: true,
+		// 会议应用暂停默认开着：竞品分析显示「开会时被弹窗打扰」是用户流失首因。
+		PauseMeetingEnabled: true,
+		// 全屏检测默认【关闭】：见字段注释——避免装完就要用户授权屏幕录制的侵略感。
+		// ScreenRecordingPermissionAsked 默认 false：还没问过用户。
 		// 宠物默认开着：它是提醒的化身，关掉等于把「到点提醒」的可视化入口藏起来。
 		// 位置留 0（= 未记录），由 PetPosition 给出落点。
 		PetVisible: true,
@@ -330,6 +393,128 @@ func (c *Config) SaveReminderSettings(in ReminderSettings) error {
 }
 
 // ---------------------------------------------------------------------------
+// 智能免打扰
+// ---------------------------------------------------------------------------
+
+// PauseSettings 是智能免打扰设置的可绑定视图（设置页读写用）。
+//
+// 4 个信号独立开关，符合 ADR 0004「逐项可关」的取舍：用户可能对「会议中不弹窗」
+// 有需求但对「我发呆 5 分钟你就闭嘴」反感——开关分开才谈得拢。
+type PauseSettings struct {
+	IdleEnabled       bool `json:"idle_enabled"`
+	LockEnabled       bool `json:"lock_enabled"`
+	MeetingEnabled    bool `json:"meeting_enabled"`
+	FullscreenEnabled bool `json:"fullscreen_enabled"`
+	// FocusEnabled / CalendarEnabled 是 P1 的两路敏感信号；默认关闭 + 显式开启 +
+	// 拒绝后降级（见 ADR 0005）。
+	FocusEnabled    bool `json:"focus_enabled"`
+	CalendarEnabled bool `json:"calendar_enabled"`
+	// IdleMinutes 空闲阈值：3 / 5 / 10 分钟三档。其他值经 LoadPauseSettings
+	// 夹取到最近的合法档（不报错——下拉框给的就是那 3 个，能收到非法值说明
+	// 是手改 config.json 或旧版本遗留）。
+	IdleMinutes int `json:"idle_minutes"`
+	// ScreenRecordingGranted 只读：macOS 屏幕录制权限当前是否已授予。
+	// 前端据此决定是否显示「去系统设置开启」按钮；Windows/Linux 恒 true。
+	ScreenRecordingGranted bool `json:"screen_recording_granted"`
+	// ScreenRecordingAsked 只读：是否曾经问过用户（拒绝过就不再弹说明窗）。
+	ScreenRecordingAsked bool `json:"screen_recording_asked"`
+	// PlatformNeedsPermission 只读：当前平台是否需要屏幕录制权限。
+	PlatformNeedsPermission bool `json:"platform_needs_permission"`
+	// 专注：三件套描述授权完整视图。Granted 由 pause.GetFocusStatus 现取；
+	// Asked 来自 config；Supported 是平台能力。
+	FocusGranted   bool `json:"focus_granted"`
+	FocusAsked     bool `json:"focus_asked"`
+	FocusSupported bool `json:"focus_supported"`
+	// FocusDenied 是「问过、被拒、平台支持」的组合——绑定层用
+	// pause.AuthorizationSnapshot.Denied() 算好后填入，前端只读一个布尔
+	// 决定要不要显示「已降级」提示，不再自己拼三个字段。
+	FocusDenied bool `json:"focus_denied"`
+	// CalendarDenied 同 FocusDenied。
+	CalendarDenied bool `json:"calendar_denied"`
+	// 日历：三件套语义同上。
+	CalendarGranted   bool `json:"calendar_granted"`
+	CalendarAsked     bool `json:"calendar_asked"`
+	CalendarSupported bool `json:"calendar_supported"`
+}
+
+// LoadPauseSettings 返回当前智能免打扰设置（回显用，阈值已归一化到合法档位）。
+func (c *Config) LoadPauseSettings() PauseSettings {
+	return PauseSettings{
+		IdleEnabled:             c.PauseIdleEnabled,
+		LockEnabled:             c.PauseLockEnabled,
+		MeetingEnabled:          c.PauseMeetingEnabled,
+		FullscreenEnabled:       c.PauseFullscreenEnabled,
+		FocusEnabled:            c.PauseFocusEnabled,
+		CalendarEnabled:         c.PauseCalendarEnabled,
+		IdleMinutes:             c.PauseIdleMinutesValue(),
+		ScreenRecordingGranted:  true, // 由绑定层用 pause.ScreenCaptureGranted 覆盖
+		ScreenRecordingAsked:    c.ScreenRecordingPermissionAsked,
+		PlatformNeedsPermission: false, // 由绑定层用 pause.RequiresScreenCapture 覆盖
+		FocusAsked:              c.FocusAskedBefore,
+		CalendarAsked:           c.CalendarAskedBefore,
+	}
+}
+
+// SavePauseSettings 校验并落盘智能免打扰设置。
+//
+// 【关于 FullscreenEnabled=true 但权限未授予】这里不做拒绝，也不主动触发系统弹窗——
+// 那是绑定方法（SetPauseSettings）的职责，因为它要弹应用内的说明窗再走系统流程。
+// 保存本身只是「记住用户意图」；即使没权限，pause 层的 detector 也会自己降级为
+// ReasonNone（见 FullscreenDetector.Detect 的注释）。
+//
+// IdleMinutes 走夹取而非报错：与 PetScaleValue 同理，能收到非档位值说明是手改配置，
+// 夹回最近的一档比让设置页弹一个用户看不懂的错误更合适。
+func (c *Config) SavePauseSettings(in PauseSettings) error {
+	c.PauseIdleEnabled = in.IdleEnabled
+	c.PauseLockEnabled = in.LockEnabled
+	c.PauseMeetingEnabled = in.MeetingEnabled
+	c.PauseFullscreenEnabled = in.FullscreenEnabled
+	c.PauseFocusEnabled = in.FocusEnabled
+	c.PauseCalendarEnabled = in.CalendarEnabled
+	c.PauseIdleMinutes = clampIdleMinutes(in.IdleMinutes)
+	return c.Save()
+}
+
+// MarkFocusAsked 记录「专注授权已问过」，让 UI 不再重复弹说明窗。
+func (c *Config) MarkFocusAsked() error {
+	c.FocusAskedBefore = true
+	return c.Save()
+}
+
+// MarkCalendarAsked 记录「日历授权已问过」。
+func (c *Config) MarkCalendarAsked() error {
+	c.CalendarAskedBefore = true
+	return c.Save()
+}
+
+// clampIdleMinutes 把任意输入夹到 3/5/10 三档中最接近的一档。
+//
+// 【为什么允许中间值】下拉框给的就是那 3 个，但用户可能手改 config.json 写个 7；
+// 硬拒会毁掉整个设置读取。选最接近的一档：7→5（差 2）比 10（差 3）近，取 5。
+func clampIdleMinutes(v int) int {
+	options := []int{3, 5, 10}
+	best := options[0]
+	bestDiff := abs(v - best)
+	for _, o := range options[1:] {
+		d := abs(v - o)
+		// 严格小于才换档：并列时保留前面的档位（3 优先于 5，5 优先于 10），
+		// 让「用户手改了一个 4」得到 3 而不是 5——更保守，暂停更容易触发。
+		if d < bestDiff {
+			best = o
+			bestDiff = d
+		}
+	}
+	return best
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// ---------------------------------------------------------------------------
 // 桌面宠物
 // ---------------------------------------------------------------------------
 
@@ -374,6 +559,17 @@ func (c *Config) PetPosition() (x, y int) {
 		y = 0
 	}
 	return x, y
+}
+
+// PauseIdleMinutesValue 返回夹取后的空闲阈值分钟数：越界一律回落默认值。
+//
+// 配置是用户可写的，手改坏了不能把非法值交给空闲检测器——过小的阈值会让"发个呆"
+// 也触发暂停，过大的阈值会让"离开半小时"仍然被弹窗打扰。
+func (c *Config) PauseIdleMinutesValue() int {
+	if c.PauseIdleMinutes < MinPauseIdleMinutes || c.PauseIdleMinutes > MaxPauseIdleMinutes {
+		return DefaultPauseIdleMinutes
+	}
+	return c.PauseIdleMinutes
 }
 
 // LoadPetSettings 返回当前宠物设置（回显用，取值已归一化）。

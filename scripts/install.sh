@@ -88,6 +88,28 @@ bash scripts/build.sh || die "构建失败"
 APP="build/bin/${APP_NAME}.app"
 [ -d "$APP" ] || die "未找到构建产物 $APP"
 
+# ---- 5.5 用稳定的本地证书签名 ----
+# 【为什么必须这一步】wails3 默认 ad-hoc 签名，指定要求退化成裸 cdhash：
+#     designated => cdhash H"6bc9..."
+# 每次重建 cdhash 都变，macOS 的 TCC 会把新二进制当成另一个应用，
+# 屏幕录制/专注/日历授权被自动撤销（症状：系统设置里勾上了，重建后又变回未勾选）。
+# 用固定的自签名证书后，指定要求变成 identifier + 证书哈希，跨重建稳定。
+#
+# 证书缺失时回落到 ad-hoc 并明确提示：不阻断构建，但要让用户知道本次授权会失效。
+SIGN_IDENTITY="${SIGN_IDENTITY:-Morrow Dev}"
+step "代码签名"
+if security find-identity -p codesigning 2>/dev/null | grep -q "\"${SIGN_IDENTITY}\""; then
+  if codesign --force --sign "$SIGN_IDENTITY" "$APP" 2>/dev/null; then
+    info "已用 ${SIGN_IDENTITY} 签名（授权可跨重建保留）"
+  else
+    info "签名失败，保持 ad-hoc；本次构建后需要重新授权"
+  fi
+else
+  info "未找到证书 ${SIGN_IDENTITY}，继续使用 ad-hoc 签名"
+  info "后果：本次安装会重置屏幕录制/专注/日历授权"
+  info "修复：bash scripts/dev-signing-cert.sh 生成一次，之后重建不再掉授权"
+fi
+
 # ---- 6. 安装到 /Applications ----
 step "安装到 ${DEST}"
 if pgrep -x "$APP_NAME" >/dev/null 2>&1; then

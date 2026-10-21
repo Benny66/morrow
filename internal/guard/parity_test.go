@@ -69,6 +69,26 @@ func TestFrontendMirrorsMatchGoSourceOfTruth(t *testing.T) {
 			tsObject: "AppEvent",
 			goPrefix: "Action",
 		},
+		{
+			// 智能免打扰的暂停原因（ticket 013）：Go 有 ReasonIdle/Lock/Meeting/...，
+			// 前端镜像 PauseReason.Idle/Lock/Meeting/...；取值必须逐字对齐。
+			// 漂移会让 UI 判错暂停原因（例如把 'in_meeting' 当未知降级为 None）。
+			name:     "暂停原因枚举",
+			goPkg:    "internal/pause",
+			tsFile:   "frontend/src/lib/pause.ts",
+			tsObject: "PauseReason",
+			goPrefix: "Reason",
+		},
+		{
+			// 休息模式状态机（ticket 013）：Go 有 StateIdle/Warning/Countdown/Done/...
+			// 【刻意不含 Skipped/EarlyCompleted 之外的分支】前端拿不到这些状态是设计选择
+			// （Alert.vue 立刻把状态收起），但常量本身仍要镜像齐全，供埋点/日志/未来扩展使用。
+			name:     "休息模式状态枚举",
+			goPkg:    "internal/restmode",
+			tsFile:   "frontend/src/lib/restmode.ts",
+			tsObject: "RestModeState",
+			goPrefix: "State",
+		},
 	}
 
 	root := projectRoot()

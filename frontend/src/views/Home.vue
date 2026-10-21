@@ -10,12 +10,14 @@ import {
   CreateReminders,
   DeleteReminder,
   GenerateQuickAddDrafts,
+  ListMissedToday,
   ListOneOffs,
   ListScenarios,
   SelectFile,
   UpdateReminder,
 } from '../../bindings/morrow/app.js'
 import { invoke, type AppError } from '../lib/invoke'
+import { EventAction, eventName } from '../lib/event'
 import {
   MAX_ATTACHMENTS,
   MAX_IMAGE_BYTES,
@@ -42,6 +44,33 @@ type ReminderInput = Parameters<typeof CreateReminder>[0]
 type QuickAddPlan = NonNullable<Awaited<ReturnType<typeof GenerateQuickAddDrafts>>>
 type QuickAddDraft = NonNullable<QuickAddPlan['drafts']>[number]
 type ScenarioRow = NonNullable<Awaited<ReturnType<typeof ListScenarios>>>[number]
+
+/**
+ * 今日已错过（US-6）。
+ *
+ * 【为什么单独查询而不是塞进 GetTodayStats】stats 每 4 秒轮询一次驱动倒计时；
+ * 已错过列表只在页面加载与 reminder:changed 事件时刷新即可，把它并入 stats 会让
+ * 一个几乎不变的列表跟着高频查询跑。
+ */
+type MissedRow = NonNullable<Awaited<ReturnType<typeof ListMissedToday>>>[number]
+const missedToday = ref<MissedRow[]>([])
+
+/** 加载今日已错过（首页加载 / reminder:changed 事件都会走到这里）。 */
+async function loadMissedToday(): Promise<void> {
+  try {
+    missedToday.value = (await invoke(() => ListMissedToday(), 'ListMissedToday')) ?? []
+  } catch {
+    // 与 pending 的加载失败一样保持静默：错过项缺席不影响主流程，用户仍能看到待处理。
+    missedToday.value = []
+  }
+}
+
+/** 已错过条目的时间文案（HH:MM）。 */
+function missedTime(fireAt: number): string {
+  const d = new Date(fireAt * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 /** 手动一次性提醒表单。when 使用本地时间字符串，提交时转 Unix 秒。 */
 interface OneOffForm {
@@ -109,6 +138,7 @@ let ticker: number | undefined
 onMounted(() => {
   void store.loadAll()
   void loadOneOffs()
+  void loadMissedToday()
   void loadScenarios()
   ticker = window.setInterval(() => {
     nowMs.value = Date.now()
@@ -126,11 +156,26 @@ onUnmounted(() => {
 useEvent<ReminderFiredPayload>(ReminderEvent.Fired, () => {
   void store.loadAll()
   void loadOneOffs()
+  void loadMissedToday()
 })
 useEvent(ReminderEvent.Changed, () => {
   void store.loadAll()
   void loadOneOffs()
+  void loadMissedToday()
   void loadScenarios()
+})
+
+/** 待处理分组的 DOM 引用；菜单栏「查看待处理」会把这一块滚进视野（US-16）。 */
+const pendingSectionRef = ref<HTMLElement | null>(null)
+
+// app:show_pending 是菜单栏「查看待处理」入口的广播（后端 internal/event）。
+// 与 reminder:changed 区分：changed 是「数据变了」，show_pending 是「用户想看」。
+useEvent(eventName('app', EventAction.ShowPending), () => {
+  void store.loadAll()
+  void loadMissedToday()
+  // nextTick 不引：pendingSectionRef 是稳定 ref（v-if 挂载后一直存在），
+  // scrollIntoView 在数据尚未到达时滚到空区块也没副作用。
+  pendingSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 })
 
 const scenario = computed(() => store.stats?.scenario ?? null)
@@ -780,7 +825,7 @@ function progressPercent(done: number, target: number): number {
         <router-link class="card__link" to="/scenarios">去创建场景</router-link>
       </div>
 
-      <section v-if="store.pending.length" class="block">
+      <section ref="pendingSectionRef" v-if="store.pending.length" class="block">
         <h2 class="block__title">
           待处理
           <el-tag size="small" type="warning">{{ store.pending.length }}</el-tag>
@@ -821,6 +866,24 @@ function progressPercent(done: number, target: number): number {
                 跳过
               </el-button>
             </div>
+          </li>
+        </ul>
+      </section>
+
+      <!-- 已错过（US-6）：智能免打扰期间跳过的每日单点与一次性提醒。
+           不补弹、不参与打卡——只是保留「今天有过这条安排」的可见回执。 -->
+      <section v-if="missedToday.length" class="block block--missed">
+        <h2 class="block__title">
+          已错过
+          <el-tag size="small" type="info">{{ missedToday.length }}</el-tag>
+          <span class="block__subtitle">免打扰期间跳过，不补弹</span>
+        </h2>
+        <ul class="missed">
+          <li v-for="item in missedToday" :key="item.fire_id" class="missed__row">
+            <span class="missed__time">{{ missedTime(item.fire_at) }}</span>
+            <span class="missed__icon">{{ kindMeta(item.kind).icon }}</span>
+            <span class="missed__title">{{ item.title }}</span>
+            <el-tag v-if="item.is_one_off" size="small" type="warning">一次性</el-tag>
           </li>
         </ul>
       </section>
@@ -1070,6 +1133,53 @@ function progressPercent(done: number, target: number): number {
   font-size: var(--font-size-md);
   color: var(--text-2);
   margin: 0 0 var(--space-3);
+}
+
+/* ---- 已错过（US-6） ---- */
+/* 视觉上刻意比【待处理】低一档：灰色、无边框、无 hover。
+   错过项没有可操作性（不能"完成"过去时刻的提醒），高对比会让人误点。 */
+.block--missed .block__subtitle {
+  font-size: var(--font-size-xs);
+  color: var(--text-3);
+  font-weight: 400;
+  margin-left: var(--space-1);
+}
+
+.missed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.missed__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: var(--font-size-sm);
+  opacity: 0.75;
+}
+
+.missed__time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  min-width: 4.5em;
+}
+
+.missed__icon {
+  font-size: var(--font-size-md);
+}
+
+.missed__title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- 快速添加（一次性提醒） ---- */

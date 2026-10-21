@@ -23,9 +23,12 @@ import (
 	"morrow/internal/dialog"
 	"morrow/internal/event"
 	"morrow/internal/model"
+	"morrow/internal/pause"
 	"morrow/internal/reminder"
+	"morrow/internal/restmode"
 	"morrow/internal/reveal"
 	"morrow/internal/service"
+	"morrow/internal/systemprefs"
 	"morrow/internal/tray"
 	// gen:import
 )
@@ -43,6 +46,15 @@ type App struct {
 	svc      *service.Service
 	cfg      *config.Config
 	trayStop func()
+	// trayInst 是 tray.Start 返回的实例句柄；状态变化时调 Refresh 重建菜单。
+	trayInst *tray.Instance
+	// trayMu / lastTrayStatus 缓存上次刷过的菜单栏状态文本，只在文本变化时
+	// 重建 NSMenu——避免每秒无谓刷新导致菜单栏闪（见 refreshTrayIfChanged）。
+	// trayStatsLines / trayStatsAt 是今日进度的 5 秒缓存（见 cachedTrayStatsLines）。
+	trayMu         sync.Mutex
+	lastTrayStatus string
+	trayStatsLines []string
+	trayStatsAt    time.Time
 	// notify 是官方通知服务实例（main.go 创建并注册进 Services，同包直接赋值）。
 	// 持有它而非每次现取：ServiceStartup 由框架回调，绑定方法只能靠这个引用触达。
 	notify *notifications.NotificationService
@@ -92,6 +104,22 @@ type App struct {
 	// 【为什么提醒不靠 AI】AI 只在"生成计划"时介入一次；提醒本身必须离线可用、
 	// 必须便宜、必须准时——这三条都指向本地定时器。见 internal/reminder 的包注释。
 	engine *reminder.Engine
+
+	// pause 是智能免打扰的信号聚合器；nil 表示所有暂停信号都关了。
+	// 由 startReminderEngine 装配，ServiceShutdown 里调 Stop 释放轮询 goroutine。
+	pause *pause.Bundle
+	// pauseMu 串行化 pause 字段的读写与 restartPauseBundle 的整段替换。
+	//
+	// 【为什么必须有】restartPauseBundle 有「读 a.pause → 写 a.pause → Stop 旧的」三步，
+	// 中间没锁的话两个并发的 SetPauseSettings 绑定调用会同时读到 old=A，
+	// 然后各自 Stop(A) → close(stop) 第二次会 panic（bundle.Stop 内部虽然已经
+	// 用 sync.Once 兜住，但字段读写本身也需要串行化以保证 a.pause 的一致性）。
+	pauseMu sync.Mutex
+
+	// restMode 是休息模式状态机（stand/move/rest 三类提醒进入的倒计时流程）。
+	// 由 startReminderEngine 构造；restModeCancel 停掉每秒 tick 的自动完成 goroutine。
+	restMode       *restmode.Machine
+	restModeCancel context.CancelFunc
 
 	// settingsMu 保护下面两个【跨 goroutine 读】的设置快照。
 	//
@@ -163,22 +191,32 @@ func (a *App) petWindow() application.Window {
 	return nil
 }
 
-// alertWindow 返回全屏强提醒窗口；窗口尚未创建或已被销毁时返回 nil。
+// allAlertWindows 返回主屏 + 所有副屏的 alert 窗口（US-18 多屏覆盖）。
 //
-// 与 mainWindow / petWindow 同构：按注册名查，而不是 Window.Current()。强提醒的
-// 显示恰恰发生在用户正在操作别的应用时——那一刻本窗口既不可见也不是 key window，
-// Current() 会返回 nil，于是"到点了但什么都没发生"，且不会有任何报错。
+// 主屏永远在结果第一位；副屏按创建顺序（alert-2, alert-3, ...）追加。
+// ShowAlert / HideAlert 用它保证「一块屏处理完 = 全部收起」的原子性。
 //
-// 【刻意不导出】：它是窗口对象的内部取值器，导出会被绑定给前端（前端拿到的是
-// 序列化后的空对象，毫无意义）。前端要的是 ShowAlert / HideAlert 这两个动作。
-func (a *App) alertWindow() application.Window {
+// 【为什么不再单独提供 alertWindow()】多屏之后所有调用点都应该是「全部屏幕」；
+// 只取主屏的旧入口留着只会诱导下一次改动漏掉副屏。窗口按注册名查而不是
+// Window.Current()：强提醒的显示发生在用户操作别的应用时，那一刻本窗口既不可见
+// 也不是 key window，Current() 返回 nil。
+func (a *App) allAlertWindows() []application.Window {
 	if a.app == nil {
 		return nil
 	}
+	wins := make([]application.Window, 0, 4)
 	if w, ok := a.app.Window.GetByName(alertWindowName); ok {
-		return w
+		wins = append(wins, w)
 	}
-	return nil
+	// 副屏数量在应用启动时固定（换屏幕需要重启），从 2 起探到首个不存在的名字为止。
+	for i := 2; ; i++ {
+		w, ok := a.app.Window.GetByName(AlertSecondaryName(i))
+		if !ok {
+			break
+		}
+		wins = append(wins, w)
+	}
+	return wins
 }
 
 // trayRunning 报告系统托盘是否真的起来了。
@@ -218,7 +256,7 @@ func (a *App) restoreWindow() {
 // 这就是 v2 的 OnStartup 没有的语义：起不来就明确失败，而不是带着半个状态继续跑。
 func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
 	// 启动系统托盘。v2 时代 macOS 上是 no-op，v3 三平台都有（见 internal/tray 的说明）。
-	stop, err := tray.Start(a.app, tray.Options{
+	inst, stop, err := tray.Start(a.app, tray.Options{
 		Icon:    trayIcon(),
 		Tooltip: appName,
 	}, tray.Handlers{
@@ -226,9 +264,20 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 			// 与 Dock 点击、二次启动共用同一实现（见 restoreWindow）。
 			a.restoreWindow()
 		},
+		OnShowPending: func() {
+			// 先拉窗口，再广播一个前端订阅的事件让 Home.vue 滚到 pending 区。
+			// 【为什么用事件而不是路由 push】路由 push 需要前端知道 hash 结构；
+			// 事件让「菜单栏点了查看待处理」这件事在后端一次决定，前端只需响应。
+			a.restoreWindow()
+			if a.app != nil {
+				a.app.Event.Emit(event.Name("app", event.ActionShowPending), nil)
+			}
+		},
 		OnQuit: func() {
 			a.app.Quit()
 		},
+		// StatusLines 让菜单栏承载 US-15 的三项进度与 US-17 的暂停原因。
+		StatusLines: a.trayStatusLines,
 	})
 	if err != nil {
 		// 托盘起不来不该让整个应用拒绝启动：它只是入口之一，窗口才是主入口。
@@ -237,6 +286,7 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 		return nil
 	}
 	a.trayStop = stop
+	a.trayInst = inst
 	// 标记托盘已就绪：关窗钩子据此决定「隐藏」还是「放行退出」（见 main.go 的钩子）。
 	a.trayUp.Store(true)
 	slog.Info("系统托盘已启动")
@@ -275,6 +325,23 @@ func (a *App) ServiceShutdown() error {
 	// 0. 先停提醒引擎：它会写数据库，必须在关库之前安静下来。
 	if a.engine != nil {
 		a.engine.Stop()
+	}
+
+	// 0.3 停智能免打扰的信号采集：锁屏轮询 goroutine 依赖 LockDetector，
+	// 引擎停了它继续跑没有意义（也没有消费者）。
+	// 读一次拷贝出来再解锁 Stop，避免与并发的 restartPauseBundle 死锁。
+	a.pauseMu.Lock()
+	bundleToStop := a.pause
+	a.pauseMu.Unlock()
+	if bundleToStop != nil && bundleToStop.Stop != nil {
+		bundleToStop.Stop()
+	}
+
+	// 0.4 停休息模式自动完成 ticker：1 秒轮询依赖 svc，svc 关库后它继续跑会
+	// 报错；且在关引擎之后已经不会有新的 Enter 请求。
+	if a.restModeCancel != nil {
+		a.restModeCancel()
+		a.restModeCancel = nil
 	}
 
 	// 0.5 停宠物贴边监测：它每 500ms 读一次窗口位置，窗口随后会被销毁，
@@ -754,14 +821,305 @@ func (a *App) startReminderEngine() {
 		return
 	}
 	a.syncSettingsFromConfig()
+	// 装配智能免打扰信号（空闲 + 锁屏）。所有开关都在设置里可关；
+	// 装配失败（未来若引入依赖外部服务的 detector）只记日志、不阻断引擎启动——
+	// 免打扰缺席只是少了便利，引擎缺席是整个提醒功能消失。
+	bundle, err := pause.NewBundle(bundleConfigFrom(a.cfg))
+	if err != nil {
+		slog.Error("装配智能免打扰失败，提醒将不受暂停影响", "err", err)
+	} else {
+		a.pauseMu.Lock()
+		a.pause = bundle
+		a.pauseMu.Unlock()
+		a.svc.SetPauseService(service.NewPauseService(bundle.Provider))
+	}
+	var provider pause.Provider
+	if bundle := a.pauseSnapshot(); bundle != nil {
+		provider = bundle.Provider
+	}
 	a.engine = reminder.NewEngine(reminder.Options{
-		Store:    a.svc,
-		Settings: a.currentReminderSettings,
-		Notifier: &reminderNotifier{notify: a.notify},
-		Emitter:  appEmitter{app: a.app},
+		Store:         a.svc,
+		Settings:      a.currentReminderSettings,
+		Notifier:      &reminderNotifier{notify: a.notify},
+		Emitter:       appEmitter{app: a.app},
+		PauseProvider: provider,
+		RestMode:      a.ensureRestMode(),
 	})
 	a.engine.Start()
 	slog.Info("提醒引擎已启动", "tick", reminder.TickInterval.String())
+}
+
+// ensureRestMode 惰性构造 restmode.Machine 并挂一个「倒计时到 0 自动完成」的
+// 1 秒 ticker goroutine。返回 Machine 引用；重复调用不会重建。
+//
+// 【为什么用 1 秒 tick 而不是让前端调 Complete】US-11 承诺倒计时结束【自动】记
+// 完成 CheckIn——如果依赖前端 Alert.vue 的 tick，用户关掉窗口或断网时状态会
+// 永远停在 Countdown，下次开机也不会自愈。服务端 tick 是唯一可靠的兜底。
+//
+// 【1 秒 tick 是否浪费】Idle 状态下每次 tick 只做两次判断（state + remaining），
+// 一秒钟可以忽略；比让引擎 TickInterval 从 20s 缩到 1s 划算得多。
+func (a *App) ensureRestMode() *restmode.Machine {
+	if a.restMode != nil {
+		return a.restMode
+	}
+	a.restMode = restmode.NewMachine()
+	ctx, cancel := context.WithCancel(context.Background())
+	a.restModeCancel = cancel
+	go a.restModeAutoComplete(ctx)
+	return a.restMode
+}
+
+// restModeAutoComplete 是 1 秒 tick 的 goroutine：Countdown 到点自动落 CheckIn + 广播。
+//
+// 单次动作失败不终止循环（比如 DB 短暂不可用），下一轮还会重试——
+// 直到状态转走或用户手动介入。
+func (a *App) restModeAutoComplete(ctx context.Context) {
+	// 循环里的 panic 兜住：这条 goroutine 挂了 = 自动完成失效 = 用户看到
+	// 「倒计时到 0 却没记完成」，是典型的没有症状的失效。
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("休息模式自动完成循环异常退出", "panic", r)
+		}
+	}()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.tickRestMode()
+		}
+	}
+}
+
+func (a *App) tickRestMode() {
+	if a.restMode == nil {
+		return
+	}
+	// 菜单栏文案在 Countdown 期间每秒变化（mm:ss）；其他状态下大多不变。
+	// 用 refreshTrayIfChanged 兜住「每秒重建 NSMenu」的浪费——文本没变就不动它。
+	a.refreshTrayIfChanged()
+	st := a.restMode.State()
+	if st != restmode.StateCountdown {
+		return
+	}
+	if a.restMode.Remaining() > 0 {
+		return
+	}
+	// 倒计时到点：把状态从 Countdown 转到 Done；再落 CheckIn；再 Reset。
+	// 三步分开的原因见 machine.Reset 的注释——落库失败时状态还是 Done，
+	// 用户可以重试；一失败就回 Idle 会让 CheckIn 丢。
+	if !a.restMode.Complete() {
+		return
+	}
+	cur := a.restMode.Current()
+	if cur.FireID != 0 && a.svc != nil {
+		if err := a.svc.CompleteReminder(cur.FireID); err != nil {
+			slog.Warn("休息模式自动记完成失败", "fire_id", cur.FireID, "err", err)
+			// 状态保持 Done 但不 Reset；用户可以从 UI 里手动重试。
+			return
+		}
+	}
+	a.restMode.Reset()
+	a.emitRestModeState()
+	// Done→Idle 的过渡在 1 秒内跑完，前端可能永远看不到 Done 状态；
+	// 单独广播一个 completed 事件让 UI 播一次「做完了」的瞬时反馈（US-11）。
+	if a.app != nil {
+		a.app.Event.Emit("restmode:completed", cur.FireID)
+	}
+}
+
+// refreshTrayIfChanged 只在状态文本变化时重建菜单，避免每秒无谓刷 NSMenu。
+//
+// 【为什么要缓存】macOS 的 SetMenu 会让菜单栏图标闪一下；空闲/无休息时每秒刷
+// 会看到菜单栏在抖。加一层 lastStatus 判等，代价是一次字符串比较，收益是稳定。
+func (a *App) refreshTrayIfChanged() {
+	if a.trayInst == nil {
+		return
+	}
+	next := strings.Join(a.trayStatusLines(), "\n")
+	a.trayMu.Lock()
+	changed := next != a.lastTrayStatus
+	if changed {
+		a.lastTrayStatus = next
+	}
+	a.trayMu.Unlock()
+	if changed {
+		a.trayInst.Refresh()
+	}
+}
+
+// emitRestModeState 把当前休息模式快照广播给前端（Alert.vue 订阅）。
+func (a *App) emitRestModeState() {
+	if a.app == nil || a.restMode == nil {
+		return
+	}
+	a.app.Event.Emit("restmode:state", a.restMode.Snapshot())
+	// 菜单栏文案随状态变化（预警 / 陪做 / 空闲）——US-9 / US-15 / US-17 的落地。
+	a.refreshTrayIfChanged()
+}
+
+// trayStatusText 返回托盘菜单顶部的一行状态文本（三优先级）。
+//
+// 优先展示【正在影响提醒投递】的状态：
+//  1. 休息模式 Countdown —「陪你休息 mm:ss」（此刻用户已被覆盖层锁住）
+//  2. 休息模式 Warning —「1 分钟后休息」（软提示）
+//  3. 智能免打扰 —「会议中 / 空闲 / 锁屏 / ...」
+//
+// 三个都不成立时返回空串，让 tray 侧隐藏顶部行。
+func (a *App) trayStatusText() string {
+	if a.restMode != nil {
+		snap := a.restMode.Snapshot()
+		switch snap.State {
+		case restmode.StateCountdown:
+			return formatTrayRemaining("陪你休息", snap.RemainingSec)
+		case restmode.StateWarning:
+			return "1 分钟后休息"
+		}
+	}
+	if bundle := a.pauseSnapshot(); bundle != nil {
+		if st := bundle.Provider.State(); st.IsPaused() {
+			return "免打扰：" + pauseReasonZh(st.Reason)
+		}
+	}
+	return ""
+}
+
+// trayStatusLines 返回托盘菜单顶部的多行状态文本（US-15 + US-17）。
+//
+// 布局：
+//
+//	今日 X/Y · 待处理 N            ← US-15 的「今日进度 + 待处理数量」
+//	下一条 HH:MM · 标题             ← US-15 的「下一条提醒时间」
+//	陪你休息 mm:ss / 免打扰：xxx    ← US-17 的暂停原因（仅在暂停 / 休息时出现）
+//
+// 【为什么把 US-15 的三项拆两行】macOS NSMenuItem 不会自动折行；一行塞太多会挤。
+// 拆两行后每行都在 20 字符内，视觉上像一张「今日速览卡」。
+// 【Stats 拉不到怎么办】返回单行「今日 — · 待处理 —」，让菜单不至于因为一次
+// 查询失败变成空白（用户会以为菜单坏了）。
+//
+// 【为什么 stats 要缓存】本函数被 refreshTrayIfChanged 每秒调一次；
+// GetTodayStats 一次跑 3–4 条 SQL。1 秒 1 次对 SQLite 来说不致命，但完全没必要——
+// 完成/待处理计数的变化频率是「用户点一次」级别，不是秒级。5 秒 TTL
+// 放在这里既保证状态行的暂停/休息段仍然秒级更新，又把 SQL 压到 1/5。
+func (a *App) trayStatusLines() []string {
+	lines := make([]string, 0, 3)
+
+	if a.svc != nil {
+		statsLines := a.cachedTrayStatsLines()
+		lines = append(lines, statsLines...)
+	}
+
+	if status := a.trayStatusText(); status != "" {
+		lines = append(lines, status)
+	}
+	return lines
+}
+
+// trayStatsTTL 是今日进度的缓存寿命。5 秒是「用户点完打卡回菜单能看到更新」的上界。
+const trayStatsTTL = 5 * time.Second
+
+// cachedTrayStatsLines 缓存 GetTodayStats 的结果，按 trayStatsTTL 过期。
+func (a *App) cachedTrayStatsLines() []string {
+	nowT := time.Now()
+	a.trayMu.Lock()
+	if nowT.Sub(a.trayStatsAt) < trayStatsTTL && a.trayStatsLines != nil {
+		out := a.trayStatsLines
+		a.trayMu.Unlock()
+		return out
+	}
+	a.trayMu.Unlock()
+
+	lines := make([]string, 0, 2)
+	stats, err := a.svc.GetTodayStats()
+	if err != nil || stats == nil {
+		lines = append(lines, "今日 — · 待处理 —")
+	} else {
+		if stats.TargetTotal > 0 {
+			lines = append(lines, fmt.Sprintf("今日 %d/%d · 待处理 %d",
+				stats.DoneTotal, stats.TargetTotal, stats.PendingCount))
+		} else {
+			lines = append(lines, fmt.Sprintf("今日 %d · 待处理 %d",
+				stats.DoneTotal, stats.PendingCount))
+		}
+		if stats.NextFireAt > 0 {
+			next := time.Unix(stats.NextFireAt, 0).Format("15:04")
+			title := stats.NextTitle
+			// 中文按 rune 截，避免 emoji / 汉字被 UTF-8 半字节切断。
+			if rs := []rune(title); len(rs) > 12 {
+				title = string(rs[:11]) + "…"
+			}
+			lines = append(lines, fmt.Sprintf("下一条 %s · %s", next, title))
+		}
+	}
+
+	a.trayMu.Lock()
+	a.trayStatsLines = lines
+	a.trayStatsAt = nowT
+	a.trayMu.Unlock()
+	return lines
+}
+
+// pauseSnapshot 是 a.pause 的原子读；restartPauseBundle 会在锁下换引用，
+// 读方一律走这里避免看到中间态。
+func (a *App) pauseSnapshot() *pause.Bundle {
+	a.pauseMu.Lock()
+	defer a.pauseMu.Unlock()
+	return a.pause
+}
+
+// formatTrayRemaining 把剩余秒数拼成「陪你休息 mm:ss」，用于菜单栏文案。
+func formatTrayRemaining(label string, sec int) string {
+	if sec < 0 {
+		sec = 0
+	}
+	m := sec / 60
+	s := sec % 60
+	return label + " " + padTwo(m) + ":" + padTwo(s)
+}
+
+func padTwo(n int) string {
+	if n < 10 {
+		return "0" + itoa(n)
+	}
+	return itoa(n)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [8]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
+
+// pauseReasonZh 把 pause.PauseReason 翻成中文。
+//
+// 【为什么在 App 而不是 pause 包】pause 包保持纯逻辑；文案是 UI 层的责任。
+// 三处（宠物气泡、菜单栏、Alert 覆盖层）都各自决定怎么呈现，不在数据层混入。
+func pauseReasonZh(r pause.PauseReason) string {
+	switch r {
+	case pause.ReasonIdle:
+		return "空闲"
+	case pause.ReasonLock:
+		return "锁屏"
+	case pause.ReasonMeeting:
+		return "会议中"
+	case pause.ReasonFullscreen:
+		return "全屏中"
+	case pause.ReasonFocus:
+		return "专注模式"
+	case pause.ReasonCalendar:
+		return "日历忙碌"
+	}
+	return "免打扰"
 }
 
 // ---------------------------------------------------------------------------
@@ -958,6 +1316,18 @@ func (a *App) GetPetGrowth() (*service.PetGrowth, error) {
 // ListPendingFires 返回待处理的提醒（首页卡片）。
 func (a *App) ListPendingFires() ([]service.PendingFire, error) {
 	list, err := a.svc.ListPendingFires()
+	if err != nil {
+		return nil, apperr.Wrap(err)
+	}
+	return list, nil
+}
+
+// ListMissedToday 返回今日已错过的提醒（首页「已错过」分组）。
+//
+// 【与 US-6 对应】智能免打扰期间被跳过的每日单点与一次性提醒在此可见；
+// 不补弹、不投递，只保留「今天确实有过这条安排」的回执。
+func (a *App) ListMissedToday() ([]service.MissedFire, error) {
+	list, err := a.svc.ListMissedToday()
 	if err != nil {
 		return nil, apperr.Wrap(err)
 	}
@@ -1199,6 +1569,305 @@ func (a *App) TogglePet() error {
 	return a.setPetVisible(!a.cfg.PetVisible)
 }
 
+// GetPauseState 返回当前暂停状态（前端轮询用）。
+//
+// 宠物窗口每 4 秒轮询一次，用于显示「我先不打扰」气泡；菜单栏同理。
+// 未启用智能免打扰时返回 Paused=false。
+func (a *App) GetPauseState() service.PauseState {
+	if a.svc == nil || a.svc.Pause() == nil {
+		return service.PauseState{Paused: false, Reason: ""}
+	}
+	return a.svc.Pause().GetState()
+}
+
+// GetRestModeSnapshot 返回当前休息模式快照（Alert.vue 每次 tick 查询）。
+//
+// Idle 时返回一个只带 State 字段的空快照；前端拿到 State=idle 就收起覆盖层。
+func (a *App) GetRestModeSnapshot() restmode.Snapshot {
+	if a.restMode == nil {
+		return restmode.Snapshot{State: restmode.StateIdle}
+	}
+	return a.restMode.Snapshot()
+}
+
+// CompleteRestMode 用户手动确认「算完成」：写 CheckIn(done) + 状态归零。
+//
+// 【为什么允许从 Countdown 与 Done 两种状态调用】
+//   - Countdown：用户在倒计时中点「提前结束 → 算完成」（US-12）；
+//   - Done：自动完成流程里 CheckIn 落库失败时，UI 显示「重试」按钮走这条路。
+//
+// Skip 状态下调用是 no-op——已经跳过的会话不能再改成完成，
+// 否则用户「跳过」后又「完成」会把 CheckIn 表搞混。
+func (a *App) CompleteRestMode() (string, error) {
+	if a.restMode == nil {
+		return "", nil
+	}
+	// Countdown 时先转 EarlyCompleted，让日志与自动完成区分开。
+	if a.restMode.State() == restmode.StateCountdown {
+		a.restMode.EarlyComplete()
+	} else if a.restMode.State() != restmode.StateDone {
+		// Skipped/Idle：不动。
+		return "", nil
+	}
+	cur := a.restMode.Current()
+	if cur.FireID != 0 && a.svc != nil {
+		if err := a.svc.CompleteReminder(cur.FireID); err != nil {
+			return "", apperr.Wrap(err)
+		}
+	}
+	a.restMode.Reset()
+	a.emitRestModeState()
+	return "已完成", nil
+}
+
+// SkipRestMode 用户点「提前结束 → 不算」：写 CheckIn(skip) + 状态归零。
+//
+// Skip 与 Complete 都能从 Countdown 出发；从 Done（自然到点）出发不允许跳过——
+// 用户已经"做完了"，再点跳过等于撤回一次打卡，产品语义会打脸。
+func (a *App) SkipRestMode() (string, error) {
+	if a.restMode == nil {
+		return "", nil
+	}
+	if a.restMode.State() != restmode.StateCountdown {
+		return "", nil
+	}
+	a.restMode.Skip()
+	cur := a.restMode.Current()
+	if cur.FireID != 0 && a.svc != nil {
+		if err := a.svc.SkipReminder(cur.FireID); err != nil {
+			return "", apperr.Wrap(err)
+		}
+	}
+	a.restMode.Reset()
+	a.emitRestModeState()
+	return "已跳过", nil
+}
+
+// GetScreenRecordingStatus 返回当前屏幕录制权限的状态。
+//
+// 类型直接引用 service.ScreenRecordingStatus（其他可绑定 DTO 同处一包），
+// 不用类型别名——wails3 生成器读的是返回值字面类型。
+func (a *App) GetScreenRecordingStatus() service.ScreenRecordingStatus {
+	return service.ScreenRecordingStatus{
+		Granted:                 pause.ScreenCaptureGranted(),
+		AskedBefore:             a.cfg.ScreenRecordingPermissionAsked,
+		PlatformNeedsPermission: pause.RequiresScreenCapture(),
+	}
+}
+
+// GetPauseSettings 返回智能免打扰的四路开关与阈值（设置页回显用）。
+//
+// 权限状态字段（Granted/Supported）由 pause 层现取；config 里的 Asked 只是
+// 「弹过没有」，与用户当前能不能读状态无关。
+func (a *App) GetPauseSettings() config.PauseSettings {
+	s := a.cfg.LoadPauseSettings()
+	s.ScreenRecordingGranted = pause.ScreenCaptureGranted()
+	s.PlatformNeedsPermission = pause.RequiresScreenCapture()
+	// 专注：Granted 现读；Supported 只在 macOS 12+ 上有（用 GetFocusStatus 是否
+	// 走通做判据——非 macOS 平台 stub 恒返回 Granted=false）。
+	focusStatus := pause.GetFocusStatus()
+	s.FocusGranted = focusStatus.Granted
+	s.FocusSupported = pause.FocusSupported()
+	s.FocusDenied = pause.AuthorizationSnapshot{
+		Granted:       focusStatus.Granted,
+		AskedBefore:   s.FocusAsked,
+		SupportedOnOS: s.FocusSupported,
+	}.Denied()
+	calStatus := pause.GetCalendarStatus()
+	s.CalendarGranted = calStatus.Granted
+	s.CalendarSupported = pause.CalendarSupported()
+	s.CalendarDenied = pause.AuthorizationSnapshot{
+		Granted:       calStatus.Granted,
+		AskedBefore:   s.CalendarAsked,
+		SupportedOnOS: s.CalendarSupported,
+	}.Denied()
+	return s
+}
+
+// RequestFocusAccess 走「应用说明 → 系统弹窗」两段式申请专注状态权限。
+//
+// 返回 granted：true=已授权；false=用户拒绝或弹窗尚未点。
+// 【与屏幕录制同样的两段式】第一次弹应用内说明窗讲清「只读忙闲、不读事件」，
+// 用户点【继续】后调系统 API 弹原生窗；拒绝过就不再骚扰（Asked 记 true）。
+func (a *App) RequestFocusAccess() (bool, error) {
+	if !pause.FocusSupported() {
+		// 平台不支持 → 视为不需要授权；上层根据 FocusSupported 已经屏蔽了 UI。
+		return true, nil
+	}
+	if pause.GetFocusStatus().Granted {
+		return true, nil
+	}
+	if a.cfg.FocusAskedBefore {
+		return false, nil
+	}
+	a.cfg.MarkFocusAsked()
+	ok, err := dialog.RequestP1AccessConsent(a.app, "系统专注联动",
+		"需要你授权 Morrow 读取【系统专注模式是否开启】这一个布尔状态。\n\n"+
+			"不会读取事件标题、参与人、备注、地点；不进入 AI 提示词；不落盘、不上传。\n\n"+
+			"如果拒绝，专注信号会静默缺席，空闲/锁屏/会议/全屏四路信号仍会正常工作。")
+	if err != nil {
+		return false, apperr.Wrap(err)
+	}
+	if !ok {
+		return false, nil
+	}
+	pause.RequestFocusAccess()
+	// 系统弹窗是异步的；本次调用不保证已授权。UI 下一次 GetPauseSettings 会看到
+	// Granted=true（若用户点了允许）。
+	return pause.GetFocusStatus().Granted, nil
+}
+
+// RequestCalendarAccess 与 RequestFocusAccess 同构，走日历授权。
+func (a *App) RequestCalendarAccess() (bool, error) {
+	if !pause.CalendarSupported() {
+		return true, nil
+	}
+	if pause.GetCalendarStatus().Granted {
+		return true, nil
+	}
+	if a.cfg.CalendarAskedBefore {
+		return false, nil
+	}
+	a.cfg.MarkCalendarAsked()
+	ok, err := dialog.RequestP1AccessConsent(a.app, "日历忙闲感知",
+		"需要你授权 Morrow 读取【当前是否落在日历忙碌时段】这一个布尔状态。\n\n"+
+			"不会读取事件标题、参与人、备注、地点；不进入 AI 提示词；不落盘、不上传。\n\n"+
+			"如果拒绝，日历信号会静默缺席，其余四路信号仍会正常工作。")
+	if err != nil {
+		return false, apperr.Wrap(err)
+	}
+	if !ok {
+		return false, nil
+	}
+	pause.RequestCalendarAccess()
+	return pause.GetCalendarStatus().Granted, nil
+}
+
+// OpenPrivacySettings 打开 macOS「系统设置 → 隐私与安全」里对应权限的面板。
+//
+// pane 取值：screen_recording / focus / calendar（见 internal/systemprefs）。
+//
+// 【为什么要这个入口】三个敏感权限被拒后，应用内的说明窗不会再弹（系统只弹一次）；
+// 没有直达链接时用户要自己翻三层菜单，多数人会直接放弃。设置页的「去系统设置」
+// 按钮走这里。
+//
+// 【失败语义】只有「命令起不来」或「pane 非法」才返回错误；anchor 在当前 macOS
+// 上不存在时系统会打开隐私根页并以成功退出——那种情况由前端的文字兜底覆盖，
+// 后端不假装能判断（见 systemprefs.URLFor 的注释）。
+func (a *App) OpenPrivacySettings(pane string) error {
+	if !systemprefs.Supported() {
+		return apperr.New(apperr.CodeInternal, "当前平台不支持跳转系统隐私设置")
+	}
+	p := systemprefs.Pane(pane)
+	if !systemprefs.Valid(p) {
+		return apperr.Validation("未知的隐私面板: " + pane)
+	}
+	if err := systemprefs.Open(p); err != nil {
+		return apperr.Wrap(err)
+	}
+	slog.Info("已打开系统隐私设置", "pane", pane)
+	return nil
+}
+
+// SetPauseSettings 校验并落盘智能免打扰设置，同时【重建】Bundle 让开关立即生效。
+//
+// 【为什么必须重建 Bundle】detector 列表在 NewBundle 里根据 Enabled 装配；
+// 只写 config 不重建，运行期引擎仍然按旧列表判定，用户会看到「关了开关但会议中还是暂停」。
+// 重建的代价很小（几个 struct + 一两个 goroutine），且引擎持有的 provider 通过
+// SwapProvider 原子替换，不会打断当轮调度。
+//
+// 【关于 Fullscreen 的授权流程】这里不做说明窗与系统弹窗；那些走独立的
+// RequestScreenCapture 绑定。若用户开了 FullscreenEnabled 但权限还没给，detector
+// 会自动降级（不暂停、不投递）——功能"看起来开着"但没起作用，前端会在下一次
+// GetPauseSettings 里通过 ScreenRecordingGranted=false 拿到状态并提示用户点授权。
+func (a *App) SetPauseSettings(in config.PauseSettings) (string, error) {
+	if err := a.cfg.SavePauseSettings(in); err != nil {
+		return "", apperr.Wrap(err)
+	}
+	a.restartPauseBundle()
+	return "已保存并生效", nil
+}
+
+// bundleConfigFrom 是 config.Config → pause.Config 的唯一映射。
+//
+// 【为什么单独抽出来】startReminderEngine 与 restartPauseBundle 都要拼装同一份
+// 7 字段结构体，两处硬编码等于两份真相；加/减信号时忘了同步一处就会出现
+// 「启动时启用了、保存设置后又被关掉」这种诡异漂移。
+func bundleConfigFrom(c *config.Config) pause.Config {
+	return pause.Config{
+		IdleEnabled:       c.PauseIdleEnabled,
+		IdleThreshold:     time.Duration(c.PauseIdleMinutesValue()) * time.Minute,
+		LockEnabled:       c.PauseLockEnabled,
+		MeetingEnabled:    c.PauseMeetingEnabled,
+		FullscreenEnabled: c.PauseFullscreenEnabled,
+		FocusEnabled:      c.PauseFocusEnabled,
+		CalendarEnabled:   c.PauseCalendarEnabled,
+	}
+}
+
+// restartPauseBundle 按最新 config 重建 pause.Bundle 并原子替换引擎里的 provider。
+//
+// 停旧 bundle 前必须先构造新的：构造失败时旧的要能继续跑（否则一次配置错误就把免打扰
+// 整体下线，用户看不到任何提示）。
+//
+// 【并发保护】整个替换在 pauseMu 下：两次并发的 SetPauseSettings 不会看到对方的中间态。
+func (a *App) restartPauseBundle() {
+	bundle, err := pause.NewBundle(bundleConfigFrom(a.cfg))
+	if err != nil {
+		slog.Error("重建智能免打扰信号失败，保留原有配置继续运行", "err", err)
+		return
+	}
+	a.pauseMu.Lock()
+	old := a.pause
+	a.pause = bundle
+	a.pauseMu.Unlock()
+	if a.svc != nil {
+		a.svc.SetPauseService(service.NewPauseService(bundle.Provider))
+	}
+	if a.engine != nil {
+		a.engine.SwapProvider(bundle.Provider)
+	}
+	// Bundle.Stop 内部有 sync.Once，重复调用（比如与 ServiceShutdown 竞态）不会 panic。
+	if old != nil && old.Stop != nil {
+		old.Stop()
+	}
+}
+
+// RequestScreenCapture 走「应用说明 → 系统弹窗」两段式申请。
+//
+// 返回 granted 与 declined_permanently：
+//   - granted=true：用户已授权，调用方可以开启 PauseFullscreenEnabled
+//   - granted=false 且 declined_permanently=true：用户曾经拒绝或本次点了「暂不开启」，
+//     UI 应改提示「请到 系统设置 → 隐私与安全 → 屏幕录制 里手动开启」
+//
+// 【为什么不让 pause 层直接调 CGRequestScreenCaptureAccess】原生弹窗的文案
+// 是「允许 XX 控制这台电脑」，把「屏幕录制」说得太宽；ADR 0004 要求先讲清楚
+// 「只读几何、不采集屏幕内容」再触发系统弹窗，多这一层说明是承诺的落地。
+func (a *App) RequestScreenCapture() (granted bool, err error) {
+	// 已经授权过：不再问，直接返回。
+	if pause.ScreenCaptureGranted() {
+		return true, nil
+	}
+	// 用户曾经明确拒绝过：不再弹说明窗，让上层引导去系统设置。
+	if a.cfg.ScreenRecordingPermissionAsked {
+		return false, nil
+	}
+	// 记一次「问过」——即使本次授权成功也记，避免状态漂移。
+	a.cfg.ScreenRecordingPermissionAsked = true
+	if saveErr := a.cfg.Save(); saveErr != nil {
+		// 落盘失败仍继续：用户已经在系统弹窗里做选择，不因为写盘失败而撤销授权。
+		slog.Warn("记录屏幕录制权限询问状态失败", "err", saveErr)
+	}
+	ok, dlgErr := dialog.RequestScreenCaptureConsent(a.app)
+	if dlgErr != nil {
+		return false, apperr.Wrap(dlgErr)
+	}
+	if !ok {
+		return false, nil
+	}
+	return pause.RequestScreenCapture(), nil
+}
+
 // setPetVisible 是三个显隐绑定的唯一实现：改窗口 + 改配置 + 落盘。
 //
 // 【为什么显隐也要落盘】用户把宠物藏起来是有意的选择，重启后又冒出来会显得
@@ -1249,32 +1918,44 @@ func (a *App) OpenMainWindow() error {
 // 绑定产物对账；写在 alert_window.go 里方法本身能编译，但护栏会报「产物过期」。
 // ---------------------------------------------------------------------------
 
-// ShowAlert 显示全屏强提醒窗口并置前。
+// ShowAlert 显示【所有屏幕的】全屏强提醒窗口并置前主屏。
 //
 // 失败一律经 apperr（绑定层的错误协议，前端按 code 分流）；窗口不存在是
 // "尚未创建或已被销毁"，属于 not_found，而不是内部错误。
+//
+// 【多屏语义（US-18）】每块屏上的 alert 窗口都被 Show()；主屏额外 Focus()
+// 让键盘事件落到完整 UI 上。副屏窗口没有可交互按钮的键盘需求，Focus 只在主屏。
 func (a *App) ShowAlert() error {
-	w := a.alertWindow()
-	if w == nil {
+	wins := a.allAlertWindows()
+	if len(wins) == 0 {
 		return apperr.NotFound("强提醒窗口尚未创建")
 	}
-	w.Show()
-	// AlwaysOnTop 保证它压在别的应用之上，但不会被系统主动聚焦；Focus 让键盘事件
-	// （用户可能直接按回车点「完成」）落到这个窗口上。
-	w.Focus()
+	for i, w := range wins {
+		w.Show()
+		if i == 0 {
+			// AlwaysOnTop 保证它压在别的应用之上，但不会被系统主动聚焦；Focus 让键盘事件
+			// （用户可能直接按回车点「完成」）落到这个窗口上。
+			w.Focus()
+		}
+	}
 	return nil
 }
 
-// HideAlert 隐藏全屏强提醒窗口。
+// HideAlert 隐藏【所有屏幕的】全屏强提醒窗口。
 //
 // 窗口只隐藏不销毁：它的前端状态（已拉到的待处理列表、正在跑的倒计时）在
 // 下一条提醒到达时可以继续用，重建一个窗口则要重新加载整个前端产物。
+//
+// 【为什么必须一起 Hide】「任一屏幕处理完 = 所有屏幕的强提醒消失」（US-19）：
+// 只隐藏被点击的那块屏会让副屏挂着一张已经处理过的旧卡片，视觉上非常诡异。
 func (a *App) HideAlert() error {
-	w := a.alertWindow()
-	if w == nil {
+	wins := a.allAlertWindows()
+	if len(wins) == 0 {
 		return apperr.NotFound("强提醒窗口尚未创建")
 	}
-	w.Hide()
+	for _, w := range wins {
+		w.Hide()
+	}
 	return nil
 }
 

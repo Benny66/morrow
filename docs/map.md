@@ -91,6 +91,8 @@
 | `openspec/specs/` | 能力规格基线（唯一真相） |
 | `openspec/changes/` | 进行中的变更提案 |
 | `docs/specs/` | `to-spec` 产出的规格说明书（供拆任务） |
+| `docs/competitive-analysis.md` | 竞品差异与本轮基础能力补齐的取舍（2026-10） |
+| `docs/specs/2026-10-20-baseline-parity.md` | 本轮规格：智能免打扰 + 场景化休息模式 + 桌面集成（P0/P1） |
 | `docs/adr/` | 不可逆决策记录（如一次性提醒独立于场景） |
 | `CONTEXT.md` | 领域术语表（一次性 / 每日单点 / 快速添加等） |
 | `docs/代码规范.md` | 命名与管道契约的编码约定 |

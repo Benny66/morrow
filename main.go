@@ -270,11 +270,22 @@ func main() {
 	//
 	// 【Hidden: true 在建窗参数里】不是创建后再 Hide（那会先闪一下全屏遮罩）。
 	// 何时显示由前端按"有没有待处理提醒"决定，见 Alert.vue 的状态机说明。
-	alertX, alertY, alertW, alertH := alertGeometry(wailsApp)
-	alertWin := wailsApp.Window.NewWithOptions(alertWindowOptions(alertW, alertH))
-	if alertWin != nil {
-		alertWin.SetSize(alertW, alertH)
-		alertWin.SetPosition(alertX, alertY)
+	//
+	// 【多屏覆盖（US-18）】每块屏幕各起一个 alert 窗口：primary 完整 UI，副屏简化。
+	// 副屏从 "alert-2" 起编号；主屏仍叫 "alert"，让 app.go 的 allAlertWindows() 不用改。
+	// 换屏幕后需要重启应用才会重排窗口——桌面健康提醒的场景里插拔显示器极罕见。
+	alertWindows := make([]application.Window, 0, 4)
+	for i, r := range alertGeometries(wailsApp) {
+		name := alertWindowName
+		if i > 0 {
+			name = AlertSecondaryName(i + 1)
+		}
+		win := wailsApp.Window.NewWithOptions(alertWindowOptions(name, r.Width, r.Height))
+		if win != nil {
+			win.SetSize(r.Width, r.Height)
+			win.SetPosition(r.X, r.Y)
+			alertWindows = append(alertWindows, win)
+		}
 	}
 	// 【它的 WindowClosing 钩子不在这里注册】必须排在主窗那条钩子【之后】，
 	// 理由见下方 alert 钩子处的注释（护栏只解析 main.go 里第一个钩子）。
@@ -364,9 +375,10 @@ func main() {
 	// main.go 里**第一个** WindowClosing 钩子来验证关窗决策（托盘在→隐藏、托盘缺失→
 	// 退出）。alert 的钩子是无条件隐藏、与托盘无关，排在前面会把主窗那条挤出去、
 	// 让护栏误判（护栏 20 会直接变红）。顺序即契约，不要为了"就近创建"把它挪回建窗旁边。
-	if alertWin != nil {
-		alertWin.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-			alertWin.Hide()
+	for _, win := range alertWindows {
+		w := win
+		w.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			w.Hide()
 			e.Cancel()
 			slog.Info("强提醒窗口被请求关闭，已改为隐藏")
 		})

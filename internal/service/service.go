@@ -20,11 +20,23 @@ type Service struct {
 	// now 是业务层时钟。一次性提醒的「时间已过去」校验与智能补日期需要可注入的
 	// 当前时间；生产默认 time.Now，测试可以固定时钟，不依赖运行环境的真实时间。
 	now func() time.Time
+	// pause 是暂停信号服务；nil 表示不启用智能免打扰。
+	pause *PauseService
 }
 
 // New 创建服务聚合，注入数据库连接。
 func New(db *gorm.DB) *Service {
 	return &Service{db: db, now: time.Now}
+}
+
+// SetPauseService 注入暂停信号服务（由启动流程在初始化 pause.Provider 后调用）。
+func (s *Service) SetPauseService(pause *PauseService) {
+	s.pause = pause
+}
+
+// Pause 返回暂停信号服务（可能为 nil）。
+func (s *Service) Pause() *PauseService {
+	return s.pause
 }
 
 // Close 释放底层数据库连接，供优雅关闭时调用。
