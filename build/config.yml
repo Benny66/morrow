@@ -15,7 +15,7 @@
 # 注意：update:build-assets 会【覆盖】你对 build/darwin/Info.plist 与
 # build/windows/info.json 的任何手改。要定制就改本文件。
 #
-# 占位符（__APP_NAME__ / com.example）由 scripts/init.sh 实例化。
+# 模板占位符（应用名 / com.example）由 scripts/init.sh 实例化。
 # ==========================================================================
 version: '3'
 

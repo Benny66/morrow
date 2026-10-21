@@ -88,6 +88,7 @@ jobs:
       # 写死会出现「go.mod 升了、发布还在用旧 CLI」的静默错配。
       # 注意可执行名是 wails3（v2 的 CLI 叫 wails，两者不通用）。
       - name: Install wails3 CLI (version from go.mod)
+        shell: bash
         run: |
           set -euo pipefail
           V="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
@@ -96,6 +97,7 @@ jobs:
           wails3 version
 
       - name: Install frontend deps
+        shell: bash
         run: cd frontend && npm install
 
       # Windows 安装器需要 NSIS；缺了 package.sh 会降级成裸 exe（不是安装器）。
@@ -149,7 +151,8 @@ jobs:
 
       - name: Package
         if: steps.template.outputs.is_template == 'false'
-        run: make package os=${{ matrix.target }}
+        shell: bash
+        run: bash scripts/package.sh ${{ matrix.target }}
 
       # 产物按「应用名-版本-平台」重命名，用户看到的就是可用的资产名
       - name: 收集产物
