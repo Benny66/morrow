@@ -43,6 +43,9 @@ type PendingFire struct {
 	IsOneOff bool `json:"is_one_off"`
 	// FireAt 计划触发时间（Unix 秒）。
 	FireAt int64 `json:"fire_at"`
+	// QuietDelivery 是否为自然停顿顺延到上限后的安静投递。
+	// Alert.vue 据此不弹全屏；首页待处理区仍照常展示。
+	QuietDelivery bool `json:"quiet_delivery"`
 }
 
 // ReminderProgress 是单条提醒的今日进度。
@@ -311,6 +314,19 @@ func (s *Service) ListPendingFires() ([]PendingFire, error) {
 			FireAt:       row.FireAt,
 		})
 	}
+	// 安静投递标记只在内存；顺手清掉已经不在待处理里的旧 ID，避免无界增长。
+	live := make(map[uint]bool, len(list))
+	s.quietMu.Lock()
+	for i := range list {
+		list[i].QuietDelivery = s.quietFires[list[i].FireID]
+		live[list[i].FireID] = true
+	}
+	for id := range s.quietFires {
+		if !live[id] {
+			delete(s.quietFires, id)
+		}
+	}
+	s.quietMu.Unlock()
 	return list, nil
 }
 

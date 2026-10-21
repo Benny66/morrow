@@ -95,6 +95,9 @@ func petWindowOptions(cfg *config.Config) application.WebviewWindowOptions {
 		Hidden:           !cfg.PetVisible,
 		BackgroundType:   application.BackgroundTypeTransparent,
 		BackgroundColour: application.RGBA{},
+		// 宠物始终排除出屏幕捕获：共享屏幕/录屏时看不到它，用户自己仍能看到。
+		// Wails 在 macOS/Windows 有实现，Linux 为 no-op（设置页会显示不支持）。
+		ContentProtectionEnabled: true,
 		// 【刻意不设 InitialPosition / X / Y】WindowXY 的 X/Y 是"相对某块屏幕
 		// WorkArea 原点"，而 Position()/SetPosition() 用的是【全局逻辑坐标】。
 		// 两者混用正是「多屏时宠物被拽回主屏」的成因：保存下来的是全局坐标，

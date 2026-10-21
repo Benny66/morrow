@@ -11,9 +11,12 @@ import {
   GetAutostartEnabled,
   GetClipboardText,
   GetDataDir,
+  GetDeferralState,
   GetMCPToken,
   GetPauseSettings,
+  GetPauseState,
   GetPetSettings,
+  GetPresentationShortcut,
   GetReminderSettings,
   GetToggleWindowShortcut,
   ImportDatabase,
@@ -34,12 +37,13 @@ import {
   SetClipboardText,
   SetPauseSettings,
   SetPetSettings,
+  SetPresentationShortcut,
   SetReminderSettings,
   SetToggleWindowShortcut,
   TestAIConnection,
 } from '../../bindings/morrow/app.js'
 import { invoke, type AppError } from '../lib/invoke'
-import { logError, logInfo } from '../lib/log'
+import { logError, logInfo, logWarn } from '../lib/log'
 
 // 设置页：主题三档 + 数据目录/备份恢复 + 通知/自启/快捷键/MCP token。
 // 演示三件事：响应式状态落盘、原生目录能力、绑定方法的组合调用（选路径 → 导出）。
@@ -61,6 +65,10 @@ const notifyHint = ref('')
 const autostartState = ref<'unknown' | 'enabled' | 'disabled'>('unknown')
 const shortcutInput = ref('')
 const shortcutHint = ref('')
+const presentationShortcutInput = ref('')
+const presentationShortcutSaved = ref('')
+const presentationShortcutRegistered = ref(false)
+const presentationShortcutHint = ref('')
 const mcpTokenSet = ref(false)
 const mcpHint = ref('')
 const importHint = ref('')
@@ -86,8 +94,15 @@ const snoozeMinutes = ref(5)
 const notifyEnabled = ref(true)
 // 全屏强提醒：属于【提醒设置】（到点怎么提醒），不是宠物设置。
 // 之所以不用 @change 立即保存：它与上面的静默时段/推迟分钟同属一组，
-// 一起点「保存提醒设置」提交，避免"改一半就已经生效"。
+// 一起点「保存提醒与不被打断设置」提交，避免"改一半就已经生效"。
 const strongAlertEnabled = ref(true)
+// 001 契约扩展：先读写这三个字段，控件由后续切片加入。
+// 若不随保存回传，Go 侧会收到零值，把用户已有的设置清零。
+const presentationSuggestEnabled = ref(true)
+const naturalPauseMaxSeconds = ref(60)
+const naturalPauseSupported = ref(true)
+const captureExclusionSupported = ref(false)
+const presentationActive = ref(false)
 const reminderHint = ref('')
 const reminderSaving = ref(false)
 
@@ -252,6 +267,32 @@ async function saveShortcut() {
   }
 }
 
+/** 演示模式快捷键：独立于「唤起主窗」；注册失败不落盘，状态如实回显。 */
+async function savePresentationShortcut() {
+  actionError.value = null
+  presentationShortcutHint.value = ''
+  try {
+    await invoke(() => SetPresentationShortcut(presentationShortcutInput.value.trim()))
+    const sc = await invoke(() => GetPresentationShortcut())
+    presentationShortcutInput.value = sc.accelerator
+    presentationShortcutSaved.value = sc.accelerator
+    presentationShortcutRegistered.value = sc.registered
+    presentationShortcutHint.value = !sc.accelerator
+      ? '已关闭'
+      : sc.registered
+        ? '已保存并生效'
+        : '已保存，但当前未生效（可能被占用）'
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+}
+
+/** 已保存的演示快捷键是否处于生效状态；输入框里未保存的编辑不算。 */
+function presentationShortcutStatusText(): string {
+  if (!presentationShortcutSaved.value) return '未启用'
+  return presentationShortcutRegistered.value ? '已生效' : '已配置但未生效（可能被占用）'
+}
+
 // MCP token：只生成/落盘，运行中的 MCP 服务在重启后启用鉴权（dev-mcp 场景）。
 async function rotateMcpToken() {
   actionError.value = null
@@ -341,12 +382,37 @@ async function refreshReminderSettings() {
     snoozeMinutes.value = current.snooze_minutes
     notifyEnabled.value = current.notify_enabled
     strongAlertEnabled.value = current.strong_alert_enabled
+    presentationSuggestEnabled.value = current.presentation_suggest_enabled
+    // UI 只有「关闭 / 30 / 60」三档；enabled=false 统一映射到关闭。
+    naturalPauseMaxSeconds.value = current.natural_pause_enabled
+      ? current.natural_pause_max_seconds
+      : 0
   } catch (e) {
     actionError.value = e as AppError
   }
 }
 
-/** 保存提醒行为设置（静默时段格式由后端校验）。 */
+/** 读取演示模式的平台能力；读不到时按不支持展示，避免给出错误承诺。 */
+/** 读取演示模式/捕获排除/顺延的平台状态；一项失败不拖累另一项。 */
+async function refreshUninterruptedState() {
+  try {
+    const state = await invoke(() => GetPauseState(), 'GetPauseState')
+    captureExclusionSupported.value = state.capture_exclusion_supported
+    presentationActive.value = state.presentation_active
+  } catch (e) {
+    captureExclusionSupported.value = false
+    logWarn('读取演示模式状态失败', { err: String(e) })
+  }
+  try {
+    const deferral = await invoke(() => GetDeferralState(), 'GetDeferralState')
+    naturalPauseSupported.value = deferral.supported
+  } catch (e) {
+    naturalPauseSupported.value = false
+    logWarn('读取顺延平台状态失败', { err: String(e) })
+  }
+}
+
+/** 保存提醒行为与不被打断设置（静默时段格式由后端校验）。 */
 async function saveReminderSettings() {
   actionError.value = null
   reminderHint.value = ''
@@ -360,6 +426,9 @@ async function saveReminderSettings() {
           snooze_minutes: snoozeMinutes.value,
           notify_enabled: notifyEnabled.value,
           strong_alert_enabled: strongAlertEnabled.value,
+          presentation_suggest_enabled: presentationSuggestEnabled.value,
+          natural_pause_enabled: naturalPauseMaxSeconds.value > 0,
+          natural_pause_max_seconds: naturalPauseMaxSeconds.value,
         }),
       'SetReminderSettings',
     )
@@ -545,6 +614,7 @@ async function gotoSystemSettings(pane: PrivacyPane): Promise<void> {
  */
 function onWindowFocus(): void {
   void refreshPauseSettings()
+  void refreshUninterruptedState()
 }
 
 /**
@@ -636,6 +706,14 @@ onMounted(async () => {
     // 快捷键状态拿不到不影响页面其余部分
   }
   try {
+    const sc = await invoke(() => GetPresentationShortcut())
+    presentationShortcutInput.value = sc.accelerator
+    presentationShortcutSaved.value = sc.accelerator
+    presentationShortcutRegistered.value = sc.registered
+  } catch {
+    // 同上
+  }
+  try {
     mcpTokenSet.value = (await invoke(() => GetMCPToken())) !== ''
   } catch {
     // 同上
@@ -643,6 +721,7 @@ onMounted(async () => {
   await refreshAutostart()
   await refreshAISettings()
   await refreshReminderSettings()
+  await refreshUninterruptedState()
   await refreshPet()
   await refreshPauseSettings()
   // 从系统设置切回来时刷新权限状态（见 onWindowFocus 的说明）。
@@ -843,10 +922,71 @@ onUnmounted(() => {
       <span class="setting__muted">到点时全屏提醒，不容易漏掉</span>
     </div>
 
+    <h2 class="setting__section">不被打断</h2>
+
+    <p class="setting__note">
+      演示模式会暂停提醒、隐藏桌宠与遮罩，并在系统支持时把它们排除出屏幕共享。
+      入口在菜单栏；不会读取屏幕内容。
+    </p>
+
+    <div class="setting">
+      <span class="setting__label">演示模式</span>
+      <span class="setting__muted">
+        {{ presentationActive
+          ? '当前演示中；从菜单栏或快捷键退出'
+          : '菜单栏或快捷键进入/退出；进入后不投递、不补发' }}
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">捕获排除</span>
+      <span class="setting__muted">
+        {{ captureExclusionSupported
+          ? '已支持：共享屏幕时看不到桌宠与遮罩'
+          : '当前系统不支持；演示模式仍会暂停提醒' }}
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">演示模式建议</span>
+      <el-switch v-model="presentationSuggestEnabled" />
+      <span class="setting__muted">会议/全屏持续 5 秒后，由宠物建议进入</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">演示快捷键</span>
+      <input
+        v-model="presentationShortcutInput"
+        class="setting__input"
+        placeholder="如 CmdOrCtrl+Shift+P，留空关闭"
+        spellcheck="false"
+      />
+      <button class="setting__btn" @click="savePresentationShortcut">保存</button>
+      <span class="setting__muted">{{ presentationShortcutStatusText() }}</span>
+      <span v-if="presentationShortcutHint" class="setting__muted">{{ presentationShortcutHint }}</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">自然停顿顺延</span>
+      <el-select
+        v-model="naturalPauseMaxSeconds"
+        class="setting__select"
+        size="small"
+        :disabled="!naturalPauseSupported"
+      >
+        <el-option :value="0" label="关闭" />
+        <el-option :value="30" label="30 秒" />
+        <el-option :value="60" label="60 秒" />
+      </el-select>
+      <span class="setting__muted">
+        {{ naturalPauseSupported ? '正在输入时，最多延后这么久再提醒' : '当前平台不支持自然停顿顺延' }}
+      </span>
+    </div>
+
     <div class="setting">
       <span class="setting__label"></span>
       <button class="setting__btn" :disabled="reminderSaving" @click="saveReminderSettings">
-        {{ reminderSaving ? '保存中…' : '保存提醒设置' }}
+        {{ reminderSaving ? '保存中…' : '保存提醒与不被打断设置' }}
       </button>
       <span v-if="reminderHint" class="setting__muted">{{ reminderHint }}</span>
     </div>

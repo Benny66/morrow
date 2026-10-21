@@ -36,3 +36,6 @@ func GetIdleDuration() time.Duration {
 	seconds := C.getIdleSeconds()
 	return time.Duration(float64(seconds) * float64(time.Second))
 }
+
+// IdleSupported 返回当前平台是否提供空闲时长读取。
+func IdleSupported() bool { return true }

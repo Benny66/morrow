@@ -52,6 +52,8 @@ type FiredPayload struct {
 	IsOneOff bool `json:"is_one_off"`
 	// FireAt 计划触发时间（Unix 秒）。
 	FireAt int64 `json:"fire_at"`
+	// QuietDelivery 是否为顺延到上限后的安静投递：不弹全屏强提醒，也不进休息模式。
+	QuietDelivery bool `json:"quiet_delivery"`
 }
 
 // ChangedPayload 是 reminder:changed 的载荷。
@@ -73,6 +75,10 @@ type Settings struct {
 	// NotifyEnabled 是否发系统通知。关闭后提醒仍然记录、仍然进待处理卡片——
 	// 这是「只想在应用内看进度」的用户要的行为，而不是把功能整个停掉。
 	NotifyEnabled bool
+	// NaturalPauseEnabled 是否在用户输入时顺延非一次性提醒。
+	NaturalPauseEnabled bool
+	// NaturalPauseMaxSeconds 顺延上限秒数；0 表示关闭。只接受 0/30/60 的配置值。
+	NaturalPauseMaxSeconds int
 }
 
 // Notification 是一次系统通知请求。
@@ -200,4 +206,7 @@ type Store interface {
 	SettleFire(fireID uint, status string, firedAt int64) error
 	// DueSnoozeFires 返回到点待补发的推迟记录（status = snooze 且 fire_at <= now）。
 	DueSnoozeFires(now int64) ([]DueFire, error)
+	// MarkQuietFire 标记某次触发为安静投递（不弹全屏，仍进待处理）。
+	// 只存内存；实现方可以据此让待处理列表回传 quiet_delivery。
+	MarkQuietFire(fireID uint)
 }

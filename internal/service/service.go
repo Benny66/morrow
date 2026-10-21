@@ -8,6 +8,7 @@
 package service
 
 import (
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,11 +23,15 @@ type Service struct {
 	now func() time.Time
 	// pause 是暂停信号服务；nil 表示不启用智能免打扰。
 	pause *PauseService
+	// quietMu / quietFires 记录「安静投递」的触发 ID（自然停顿顺延到上限）。
+	// 只在内存中：重启后旧的安静投递会按普通待处理展示——这是 B-11 的已知取舍。
+	quietMu    sync.Mutex
+	quietFires map[uint]bool
 }
 
 // New 创建服务聚合，注入数据库连接。
 func New(db *gorm.DB) *Service {
-	return &Service{db: db, now: time.Now}
+	return &Service{db: db, now: time.Now, quietFires: map[uint]bool{}}
 }
 
 // SetPauseService 注入暂停信号服务（由启动流程在初始化 pause.Provider 后调用）。

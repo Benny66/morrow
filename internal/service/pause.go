@@ -12,6 +12,17 @@ type PauseState struct {
 	Reason string `json:"reason"`
 	// Since 暂停开始时间（Unix 秒；0 表示未暂停）。
 	Since int64 `json:"since"`
+	// PresentationActive 是否处于演示模式。
+	PresentationActive bool `json:"presentation_active"`
+	// PresentationSource 演示模式来源：manual / suggested；未激活时为空串。
+	PresentationSource string `json:"presentation_source"`
+	// PresentationExitedAt 最近一次退出演示模式的时间（Unix 秒；0 表示从未退出）。
+	PresentationExitedAt int64 `json:"presentation_exited_at"`
+	// SuggestionVisible 是否满足演示建议的触发条件（触发时长/设置/会话）。
+	// 是否真正渲染还要看有没有待处理或休息模式，由宠物 UI 决定。
+	SuggestionVisible bool `json:"suggestion_visible"`
+	// CaptureExclusionSupported 当前平台是否支持把宠物/遮罩排除出屏幕捕获。
+	CaptureExclusionSupported bool `json:"capture_exclusion_supported"`
 }
 
 // ScreenRecordingStatus 是屏幕录制权限状态的可绑定视图（前端设置页用）。

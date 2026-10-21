@@ -297,7 +297,8 @@ func main() {
 	// 窗口会降优先级、可能节流甚至挂起页面——一旦那一页被挂起，遮罩永远不出现，
 	// 且没有任何日志（本仓最忌讳的"没有症状的失效"）。
 	//
-	// 【职责边界】这里只保证"窗出来"：不判断有没有待处理、不渲染内容、不调 Focus()。
+	// 【职责边界】这里只保证"窗出来"：不判断有没有待处理、不渲染内容、不调 Focus()；
+	// 但演示模式期间必须拒绝推窗——否则全屏遮罩会在共享画面里闪一下。
 	// 内容由前端渲染（那一页恢复可见时会在 visibilitychange 上自己 syncVisibility），
 	// 有没有待处理也由前端判断；抢焦点比晚出现半秒更讨厌（用户可能正在别处打字）。
 	// 用 GetByName 而不是调 App 的绑定方法：绑定层一行都不动（护栏 3 要复算方法 ID）。
@@ -306,7 +307,7 @@ func main() {
 	// 与本仓其它 cfg 字段（如负责开关宠物的 PetVisible）的既有取舍一致：
 	// 单个 bool 不会撕裂读，最坏是晚一个 tick 才反映新值，不影响正确性。
 	alertShowHook = func() {
-		if !cfg.StrongAlertEnabled {
+		if !cfg.StrongAlertEnabled || appSvc.isPresentationActive() {
 			return
 		}
 		if w, ok := wailsApp.Window.GetByName(alertWindowName); ok && w != nil {

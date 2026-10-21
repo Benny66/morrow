@@ -18,6 +18,7 @@ func TestPauseReasonEnum(t *testing.T) {
 		ReasonFullscreen,
 		ReasonFocus,
 		ReasonCalendar,
+		ReasonPresentation,
 	}
 
 	// 每个 reason 必须有唯一的字符串表示（前端镜像依赖这个值）。
@@ -82,5 +83,29 @@ func TestIdleDetector(t *testing.T) {
 	reason = detector.Detect()
 	if reason != ReasonNone {
 		t.Errorf("空闲 3 分钟应返回 ReasonNone，实际为 %s", reason)
+	}
+}
+
+// staticDetector 是组合优先级测试用的固定信号。
+type staticDetector struct {
+	reason PauseReason
+	since  time.Time
+}
+
+func (d staticDetector) Detect() PauseReason { return d.reason }
+func (d staticDetector) Since() time.Time    { return d.since }
+
+// TestPresentationReasonHighestPriority 演示模式是用户主动意图，
+// 必须压过锁屏/会议/全屏等自动信号。
+func TestPresentationReasonHighestPriority(t *testing.T) {
+	now := time.Now()
+	provider := NewCompositeProvider(
+		staticDetector{reason: ReasonLock, since: now},
+		staticDetector{reason: ReasonMeeting, since: now},
+		staticDetector{reason: ReasonPresentation, since: now},
+	)
+	if got := provider.State().Reason; got != ReasonPresentation {
+		t.Errorf("演示模式与锁屏/会议并存时 State().Reason = %q，期望 %q",
+			got, ReasonPresentation)
 	}
 }

@@ -17,9 +17,10 @@
  * - fullscreen：前台窗口铺满当前屏幕
  * - focus：系统专注模式开启（macOS 12+）
  * - calendar：日历显示当前忙碌（macOS EventKit）
+ * - presentation：演示模式（用户主动进入，或经会议/全屏建议进入）
  *
  * 【顺序不是随便的】Go 侧 CompositeProvider 里 `reasonPriority` map 决定
- * 同时触发时展示哪个（lock > focus > calendar > meeting > fullscreen > idle）。
+ * 同时触发时展示哪个（presentation > lock > focus > calendar > meeting > fullscreen > idle）。
  * 这里的字符串取值是【契约】——Go 端改了名字（例如把 'meeting' 改成 'in_meeting'）
  * 会破坏 parity guard；优先级顺序调整不影响 TS 常量。
  */
@@ -32,6 +33,7 @@ export const PauseReason = {
   Fullscreen: 'fullscreen',
   Focus: 'focus',
   Calendar: 'calendar',
+  Presentation: 'presentation',
 } as const
 
 export type PauseReasonValue = (typeof PauseReason)[keyof typeof PauseReason]

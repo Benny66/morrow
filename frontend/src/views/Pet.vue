@@ -15,7 +15,9 @@ import { Window } from '@wailsio/runtime'
 import {
   CollapsePet,
   CompleteReminder,
+  DismissPresentationSuggestion,
   ExpandPet,
+  GetDeferralState,
   GetPauseState,
   GetPetGrowth,
   GetPetSettings,
@@ -25,6 +27,7 @@ import {
   OpenMainWindow,
   SetPetBubbleHeight,
   SetPetBubbleVisible,
+  SetPresentationMode,
   SnoozeReminder,
 } from '../../bindings/morrow/app.js'
 import { invoke } from '../lib/invoke'
@@ -85,6 +88,12 @@ const growth = ref<GrowthStage>(0)
 const paused = ref(false)
 /** 暂停原因（idle/lock/meeting/fullscreen/focus/calendar；空串表示未暂停）。 */
 const pauseReason = ref('')
+/** 是否显示「进入演示模式」建议（后端已过滤设置/触发/会话）。 */
+const suggestionVisible = ref(false)
+/** 建议气泡动作的忙碌态，避免重复点击。 */
+const presentationBusy = ref(false)
+/** 是否有提醒正在自然停顿顺延（宠物显示「等你停下」）。 */
+const deferring = ref(false)
 
 // ---- 休息模式状态 ----
 
@@ -352,7 +361,6 @@ const artStyleWithDrag = computed(() => ({
 
 /** 是否显示气泡：有待处理提醒时才说话。 */
 const bubbleVisible = computed(() => pendingCount.value > 0)
-
 /**
  * 当前气泡对应的待处理提醒 ID（0 表示没有）。
  *
@@ -366,6 +374,22 @@ const bubbleHeading = computed(() => bubbleTitle.value || '该起来动一下了
 
 /** 是否显示暂停气泡：暂停时显示「我先不打扰」。 */
 const pauseBubbleVisible = computed(() => paused.value)
+
+/**
+ * 是否显示演示建议：后端已过滤触发时长/设置/会话；这里只加 UI 优先级——
+ * 有待处理提醒时让位，避免建议盖住真正的提醒。
+ */
+const presentationSuggestionVisible = computed(
+  () => suggestionVisible.value && pendingCount.value === 0,
+)
+
+/**
+ * 顺延气泡：用户正在输入时显示「等你停下」。
+ * 有待处理提醒时让位——待处理是用户真正需要处理的东西。
+ */
+const deferringBubbleVisible = computed(
+  () => deferring.value && pendingCount.value === 0,
+)
 
 /** 是否显示休息模式预警气泡（Warning 状态优先于普通待处理气泡）。 */
 const restWarningVisible = computed(() => restSnap.value?.state === RestModeState.StateWarning)
@@ -392,6 +416,7 @@ const pauseBubbleText = computed(() => {
     fullscreen: '检测到全屏应用，我先不打扰',
     focus: '系统专注模式已开启，我先不打扰',
     calendar: '日历显示你正忙，我先不打扰',
+    presentation: '演示模式中，我先隐身',
   }
   return reasonMap[pauseReason.value] || '我先不打扰'
 })
@@ -596,19 +621,53 @@ async function syncGrowth(): Promise<void> {
 }
 
 /**
- * 拉取并应用暂停状态（4 秒轮询）。
+ * 拉取并应用暂停、演示建议与顺延状态（4 秒轮询）。
  *
- * 暂停时显示「我先不打扰」气泡；恢复后收起气泡。
- * 失败时保持上一次值，不闪回、不报错。
+ * 两个调用独立失败：一个读不到时保留它上一次的值，不拖累另一个。
  */
-async function syncPauseState(): Promise<void> {
+async function syncInterruptionState(): Promise<void> {
   try {
     const result = await invoke(() => GetPauseState(), 'GetPauseState')
     paused.value = result?.paused ?? false
     pauseReason.value = result?.reason ?? ''
+    suggestionVisible.value = result?.suggestion_visible ?? false
   } catch (e) {
     // 读不到时保持上一次状态：静默降级优于报错。
-    logWarn('读取暂停状态失败', { err: String(e) })
+    logWarn('读取暂停/建议状态失败', { err: String(e) })
+  }
+  try {
+    const deferral = await invoke(() => GetDeferralState(), 'GetDeferralState')
+    deferring.value = deferral?.active ?? false
+  } catch (e) {
+    logWarn('读取顺延状态失败', { err: String(e) })
+  }
+}
+
+/** 从宠物建议进入演示模式（source=suggested）。 */
+async function enterPresentationFromSuggestion(): Promise<void> {
+  if (presentationBusy.value) return
+  presentationBusy.value = true
+  try {
+    await invoke(() => SetPresentationMode(true, 'suggested'), 'SetPresentationMode')
+    await syncInterruptionState()
+  } catch (e) {
+    logWarn('进入演示模式失败', { err: String(e) })
+  } finally {
+    presentationBusy.value = false
+  }
+}
+
+/** 忽略本次建议；同一会议会话内不再建议。 */
+async function dismissPresentationSuggestion(): Promise<void> {
+  if (presentationBusy.value) return
+  presentationBusy.value = true
+  try {
+    await invoke(() => DismissPresentationSuggestion(), 'DismissPresentationSuggestion')
+    suggestionVisible.value = false
+  } catch (e) {
+    logWarn('忽略演示建议失败', { err: String(e) })
+  } finally {
+    presentationBusy.value = false
   }
 }
 
@@ -655,6 +714,8 @@ useEvent<ReminderFiredPayload>(ReminderEvent.Fired, (payload) => {
   pendingCount.value = Math.max(1, pendingCount.value)
   setAnim(PetAnim.Waiting)
   void refreshPending()
+  // 顺延中的提醒被投递后，尽快让「等你停下」气泡收起。
+  void syncInterruptionState()
 })
 
 useEvent(ReminderEvent.Changed, () => {
@@ -908,7 +969,7 @@ async function pollSettings(): Promise<void> {
   // 生长档位、暂停状态、休息模式并入同一次 4 秒轮询：兜住「次日翻篇」这类没有
   // 打卡事件的情况。休息模式的预警与倒计时都靠这个通道刷新。
   await syncGrowth()
-  await syncPauseState()
+  await syncInterruptionState()
   await syncRestModeState()
   // 4 秒一次的兜底：原生窗口显隐、引擎差异都可能让观察器漏事件。
   // 有气泡时重报一次；Go 侧对相同尺寸是幂等的，不会反复 resize。
@@ -999,6 +1060,38 @@ onUnmounted(() => {
       <p class="bubble__title">{{ restWarningText }}</p>
     </div>
 
+    <!-- 顺延气泡：用户正在输入时显示「等你停下」；有更高优先级气泡时让位。 -->
+    <div v-else-if="deferringBubbleVisible" ref="bubbleRef" class="bubble bubble--pause">
+      <p class="bubble__title">等你停下</p>
+      <p class="bubble__text">你在输入，我稍后再提醒。</p>
+    </div>
+
+    <!-- 演示建议：会议/全屏持续 5 秒后出现；有待处理/休息时让位，避免盖住真正的提醒。 -->
+    <div
+      v-else-if="presentationSuggestionVisible"
+      ref="bubbleRef"
+      class="bubble bubble--suggestion"
+    >
+      <p class="bubble__title">在开会或共享屏幕？</p>
+      <p class="bubble__text">进入演示模式，暂停提醒并隐藏桌宠。</p>
+      <div class="bubble__actions">
+        <button
+          class="bubble__btn bubble__btn--primary"
+          :disabled="presentationBusy"
+          @click="enterPresentationFromSuggestion"
+        >
+          进入
+        </button>
+        <button
+          class="bubble__btn"
+          :disabled="presentationBusy"
+          @click="dismissPresentationSuggestion"
+        >
+          不用了
+        </button>
+      </div>
+    </div>
+
     <!-- 暂停气泡：智能免打扰期间显示「我先不打扰」。 -->
     <div v-else-if="pauseBubbleVisible" ref="bubbleRef" class="bubble bubble--pause">
       <p class="bubble__title">{{ pauseBubbleText }}</p>
@@ -1006,9 +1099,9 @@ onUnmounted(() => {
 
     <!-- 待处理气泡：只有没有更高优先级气泡时才出现。按钮直接作用于第一条提醒，
          让用户不必打开主窗口就能处理。
-         【必须是这条链的最后一支】陪做 > 预警 > 暂停 > 待处理：同一时刻只显示一个
-         气泡。倒计时期间用户正在「做」，再叠一个完成/推迟只会抢注意力，也会让
-         「从宠物提前完成」绕过休息模式的会话收尾。 -->
+         【必须是这条链的最后一支】陪做 > 预警 > 顺延 > 演示建议（仅无待处理） >
+         暂停 > 待处理：同一时刻只显示一个气泡。倒计时期间用户正在「做」，再叠一个
+         完成/推迟只会抢注意力，也会让「从宠物提前完成」绕过休息模式的会话收尾。 -->
     <div v-else-if="bubbleVisible" ref="bubbleRef" class="bubble">
       <!-- 场景名先行：先回答"这是哪个计划"，再说这条提醒本身 -->
       <p v-if="bubbleScenario" class="bubble__scenario">{{ bubbleScenario }}</p>
@@ -1147,6 +1240,16 @@ onUnmounted(() => {
 .bubble--warning {
   background: var(--bg-raised);
   border-color: var(--color-primary-300);
+}
+
+/* 演示建议气泡：比暂停气泡更主动，但仍用次要色调，不抢休息/待处理。 */
+.bubble--suggestion {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-300);
+}
+
+.bubble--suggestion::after {
+  background: var(--color-primary-soft);
 }
 
 /* 陪做气泡（Countdown）：与休息模式覆盖层同色系（品牌主色），文字用 tabular-nums

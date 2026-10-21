@@ -44,6 +44,8 @@ type Bundle struct {
 	Focus *FocusDetector
 	// Calendar 是日历忙闲检测器；测试与诊断入口。
 	Calendar *CalendarDetector
+	// Presentation 是用户主动进入演示模式的信号；始终存在，即使其它信号全关。
+	Presentation *PresentationDetector
 	// Stop 释放后台监听资源；调用一次后不应再调。
 	Stop func()
 }
@@ -51,15 +53,16 @@ type Bundle struct {
 // NewBundle 按配置装配暂停信号，并启动平台层的锁屏监听。
 //
 // 返回的 Bundle.Stop 需要在应用退出前调用；否则 goroutine 会一直轮询。
-// cfg 里所有 Enabled 都为 false 时，仍然返回一个空 provider（永远不暂停），
-// 这样调用方不需要处理 nil。
+// cfg 里所有 Enabled 都为 false 时，仍返回一个可用 provider：自动信号全部不触发，
+// 但用户主动进入演示模式时仍会暂停。
 func NewBundle(cfg Config) (*Bundle, error) {
 	lock := NewLockDetector()
 	meeting := NewMeetingDetector(GetFrontmostApp)
 	fullscreen := NewFullscreenDetector(GetFrontWindowInfo)
 	focus := NewFocusDetector(GetFocusStatus)
 	calendar := NewCalendarDetector(GetCalendarStatus)
-	var detectors []Detector
+	presentation := NewPresentationDetector()
+	detectors := []Detector{presentation}
 
 	if cfg.IdleEnabled {
 		idle := NewIdleDetector(GetIdleDuration, cfg.IdleThreshold)
@@ -110,12 +113,13 @@ func NewBundle(cfg Config) (*Bundle, error) {
 	// sync.Once 是最便宜的兜底。
 	var stopOnce sync.Once
 	return &Bundle{
-		Provider:   provider,
-		Lock:       lock,
-		Meeting:    meeting,
-		Fullscreen: fullscreen,
-		Focus:      focus,
-		Calendar:   calendar,
+		Provider:     provider,
+		Lock:         lock,
+		Meeting:      meeting,
+		Fullscreen:   fullscreen,
+		Focus:        focus,
+		Calendar:     calendar,
+		Presentation: presentation,
 		Stop: func() {
 			stopOnce.Do(func() {
 				if stopLockWatcher != nil {

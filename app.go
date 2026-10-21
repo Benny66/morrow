@@ -24,6 +24,7 @@ import (
 	"morrow/internal/event"
 	"morrow/internal/model"
 	"morrow/internal/pause"
+	"morrow/internal/presentation"
 	"morrow/internal/reminder"
 	"morrow/internal/restmode"
 	"morrow/internal/reveal"
@@ -58,11 +59,14 @@ type App struct {
 	// notify 是官方通知服务实例（main.go 创建并注册进 Services，同包直接赋值）。
 	// 持有它而非每次现取：ServiceStartup 由框架回调，绑定方法只能靠这个引用触达。
 	notify *notifications.NotificationService
-	// shortcutAcc 是【已注册到系统】的快捷键串，与 cfg.ShortcutToggleWindow（期望值）
-	// 分开——注册失败时二者允许短暂不一致。读写发生在绑定调用与 ServiceStartup
+	// shortcutAcc / presentationShortcutAcc 是【已注册到系统】的快捷键串，与配置里的
+	// 期望值分开——注册失败时二者允许短暂不一致。读写发生在绑定调用与 ServiceStartup
 	// 两个 goroutine，由 shortcutMu 串行化。
 	shortcutMu  sync.Mutex
 	shortcutAcc string
+	// presentationShortcutAcc 是演示模式快捷键的【已注册】串；
+	// 与 cfg.ShortcutPresentation 分开，理由同上。
+	presentationShortcutAcc string
 	// petMu 串行化宠物窗口的显示/隐藏与尺寸变更。
 	//
 	// 三条入口会动它：设置页保存（SetPetSettings）、托盘/快捷方式式的显隐调用
@@ -115,6 +119,9 @@ type App struct {
 	// pause 是智能免打扰的信号聚合器；nil 表示所有暂停信号都关了。
 	// 由 startReminderEngine 装配，ServiceShutdown 里调 Stop 释放轮询 goroutine。
 	pause *pause.Bundle
+	// presentation 是演示模式的临时状态机；不持久化，重启即关闭。
+	// 它只保存状态，暂停/窗口显隐由 App 桥接（见 setPresentationMode）。
+	presentation *presentation.Controller
 	// pauseMu 串行化 pause 字段的读写与 restartPauseBundle 的整段替换。
 	//
 	// 【为什么必须有】restartPauseBundle 有「读 a.pause → 写 a.pause → Stop 旧的」三步，
@@ -144,7 +151,11 @@ type App struct {
 
 // NewApp 创建应用实例，注入服务聚合与配置（由 main.go 完成组合根组装）。
 func NewApp(svc *service.Service, cfg *config.Config) *App {
-	app := &App{svc: svc, cfg: cfg}
+	app := &App{
+		svc:          svc,
+		cfg:          cfg,
+		presentation: presentation.NewController(),
+	}
 	// 启动前先把设置拷进内存快照：引擎与绑定方法随后都从快照读取，
 	// 避免它们在运行期各自去翻 *config.Config（那是并发读写的源头）。
 	app.syncSettingsFromConfig()
@@ -280,6 +291,8 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 				a.app.Event.Emit(event.Name("app", event.ActionShowPending), nil)
 			}
 		},
+		OnTogglePresentation: a.togglePresentationMode,
+		PresentationActive:   a.isPresentationActive,
 		OnQuit: func() {
 			a.app.Quit()
 		},
@@ -306,6 +319,13 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 			slog.Error("注册全局快捷键失败", "accelerator", acc, "err", err)
 		} else {
 			slog.Info("全局快捷键已注册", "accelerator", acc)
+		}
+	}
+	if acc := strings.TrimSpace(a.cfg.ShortcutPresentation); acc != "" {
+		if err := a.registerPresentationShortcut(acc); err != nil {
+			slog.Error("注册演示模式快捷键失败", "accelerator", acc, "err", err)
+		} else {
+			slog.Info("演示模式快捷键已注册", "accelerator", acc)
 		}
 	}
 
@@ -672,33 +692,55 @@ func (a *App) SetAutostart(enabled bool) error {
 // ---------------------------------------------------------------------------
 
 // registerToggleShortcut 把「唤起/隐藏主窗口」快捷键注册为 acc（空串=注销）。
-// 先注销旧注册再注册新的；新串注册失败时回滚旧注册，保证系统状态与调用前一致。
-// 持锁操作：shortcutAcc 是跨 goroutine 的共享状态（见 App 字段注释）。
+// 调用方持有 shortcutMu 的语义见 registerShortcut。
 func (a *App) registerToggleShortcut(acc string) error {
 	a.shortcutMu.Lock()
 	defer a.shortcutMu.Unlock()
 
-	if a.shortcutAcc != "" {
-		// 注销失败不阻断重注册：快捷键可能已被系统侧清掉（注销返回错误但目标本来就是空的）。
-		_ = a.app.GlobalShortcut.Unregister(a.shortcutAcc) // 失败无副作用，见上注
+	fallback := ""
+	if a.cfg != nil {
+		fallback = a.cfg.ShortcutToggleWindow
 	}
-	a.shortcutAcc = ""
+	return a.registerShortcut(&a.shortcutAcc, acc, fallback, a.toggleMainWindow)
+}
+
+// registerPresentationShortcut 把「切换演示模式」快捷键注册为 acc（空串=注销）。
+func (a *App) registerPresentationShortcut(acc string) error {
+	a.shortcutMu.Lock()
+	defer a.shortcutMu.Unlock()
+
+	fallback := ""
+	if a.cfg != nil {
+		fallback = a.cfg.ShortcutPresentation
+	}
+	return a.registerShortcut(&a.presentationShortcutAcc, acc, fallback, a.togglePresentationMode)
+}
+
+// registerShortcut 是两条全局快捷键的唯一注册实现。
+//
+// 先注销旧注册再注册新的；新串失败时尽力恢复 fallback，保证系统状态与调用前一致。
+// 调用方必须持有 shortcutMu。
+func (a *App) registerShortcut(current *string, acc, fallback string, callback func()) error {
+	if *current != "" {
+		// 注销失败不阻断重注册：快捷键可能已被系统侧清掉（注销返回错误但目标本来就是空的）。
+		_ = a.app.GlobalShortcut.Unregister(*current)
+	}
+	*current = ""
 
 	if acc == "" {
 		return nil
 	}
-	if err := a.app.GlobalShortcut.Register(acc, a.toggleMainWindow); err != nil {
-		// 回滚：尽力把旧快捷键恢复注册（失败只记日志——已经处于降级状态）。
-		if prev := a.cfg.ShortcutToggleWindow; strings.TrimSpace(prev) != "" {
-			if reErr := a.app.GlobalShortcut.Register(prev, a.toggleMainWindow); reErr != nil {
+	if err := a.app.GlobalShortcut.Register(acc, callback); err != nil {
+		if prev := strings.TrimSpace(fallback); prev != "" {
+			if reErr := a.app.GlobalShortcut.Register(prev, callback); reErr != nil {
 				slog.Error("回滚全局快捷键注册失败", "accelerator", prev, "err", reErr)
 			} else {
-				a.shortcutAcc = prev
+				*current = prev
 			}
 		}
 		return err
 	}
-	a.shortcutAcc = acc
+	*current = acc
 	return nil
 }
 
@@ -706,14 +748,23 @@ func (a *App) registerToggleShortcut(acc string) error {
 // 空串 = 关闭该快捷键。非法串（注册失败，常见原因：被其他应用占用）不落盘。
 func (a *App) SetToggleWindowShortcut(acc string) error {
 	acc = strings.TrimSpace(acc)
-	if err := a.registerToggleShortcut(acc); err != nil {
+
+	// 与 SetPresentationShortcut 同样：配置写入放在 shortcutMu 内，
+	// 与 registerToggleShortcut 回滚时对旧值的读取保持一致。
+	a.shortcutMu.Lock()
+	err := a.registerShortcut(&a.shortcutAcc, acc, a.cfg.ShortcutToggleWindow, a.toggleMainWindow)
+	if err == nil {
+		a.cfg.ShortcutToggleWindow = acc
+	}
+	a.shortcutMu.Unlock()
+
+	if err != nil {
 		// 面向用户的提示 + 原始错误保留在 Detail（排查"被谁占用"要用）。
 		slog.Error("注册全局快捷键失败", "accelerator", acc, "err", err)
 		ae := apperr.Wrap(err)
 		ae.Message = "注册快捷键失败（可能已被其他应用占用）"
 		return ae
 	}
-	a.cfg.ShortcutToggleWindow = acc
 	if err := a.cfg.Save(); err != nil {
 		return apperr.Wrap(err)
 	}
@@ -725,6 +776,50 @@ func (a *App) GetToggleWindowShortcut() string {
 	a.shortcutMu.Lock()
 	defer a.shortcutMu.Unlock()
 	return a.shortcutAcc
+}
+
+// SetPresentationShortcut 设置「切换演示模式」全局快捷键并落盘。
+// 空串 = 关闭。注册失败不落盘，返回面向用户的错误。
+func (a *App) SetPresentationShortcut(acc string) error {
+	acc = strings.TrimSpace(acc)
+
+	// 配置写入与 GetPresentationShortcut / registerPresentationShortcut 的读取
+	// 共用 shortcutMu，避免设置页加载与保存并发时出现字符串头竞态。
+	a.shortcutMu.Lock()
+	err := a.registerShortcut(&a.presentationShortcutAcc, acc, a.cfg.ShortcutPresentation, a.togglePresentationMode)
+	if err == nil {
+		a.cfg.ShortcutPresentation = acc
+	}
+	a.shortcutMu.Unlock()
+
+	if err != nil {
+		slog.Error("注册演示模式快捷键失败", "accelerator", acc, "err", err)
+		ae := apperr.Wrap(err)
+		ae.Message = "注册快捷键失败（可能已被其他应用或唤起主窗快捷键占用）"
+		return ae
+	}
+	if err := a.cfg.Save(); err != nil {
+		return apperr.Wrap(err)
+	}
+	return nil
+}
+
+// GetPresentationShortcut 返回配置的演示快捷键与当前是否已注册。
+//
+// 配置值与注册状态分开返回：启动时注册失败也要让用户看到自己配置了什么，
+// 否则设置页会把一个"配置了但没生效"的快捷键显示成空白。
+func (a *App) GetPresentationShortcut() config.PresentationShortcut {
+	a.shortcutMu.Lock()
+	defer a.shortcutMu.Unlock()
+
+	out := config.PresentationShortcut{}
+	if a.cfg != nil {
+		// 手改配置可能带空格；启动注册用的是 trim 后的值，回显也统一 trim。
+		out.Accelerator = strings.TrimSpace(a.cfg.ShortcutPresentation)
+	}
+	out.Registered = strings.TrimSpace(a.presentationShortcutAcc) != "" &&
+		a.presentationShortcutAcc == out.Accelerator
+	return out
 }
 
 // toggleMainWindow 是全局快捷键的回调：窗口可见 → 隐藏到托盘（托盘不在则不动，
@@ -785,10 +880,12 @@ func (a *App) syncSettingsFromConfig() {
 		return
 	}
 	reminderSettings := reminder.Settings{
-		QuietStart:    a.cfg.QuietStart,
-		QuietEnd:      a.cfg.QuietEnd,
-		SnoozeMinutes: a.cfg.SnoozeMinutes,
-		NotifyEnabled: a.cfg.NotifyEnabled,
+		QuietStart:             a.cfg.QuietStart,
+		QuietEnd:               a.cfg.QuietEnd,
+		SnoozeMinutes:          a.cfg.SnoozeMinutes,
+		NotifyEnabled:          a.cfg.NotifyEnabled,
+		NaturalPauseEnabled:    a.cfg.NaturalPauseEnabled,
+		NaturalPauseMaxSeconds: a.cfg.NaturalPauseMaxSeconds,
 	}
 	aiSettings := a.cfg.AISettings()
 
@@ -841,6 +938,7 @@ func (a *App) startReminderEngine() {
 	if err != nil {
 		slog.Error("装配智能免打扰失败，提醒将不受暂停影响", "err", err)
 	} else {
+		a.applyPresentationToBundle(bundle)
 		a.pauseMu.Lock()
 		a.pause = bundle
 		a.pauseMu.Unlock()
@@ -856,6 +954,7 @@ func (a *App) startReminderEngine() {
 		Notifier:      &reminderNotifier{notify: a.notify},
 		Emitter:       appEmitter{app: a.app},
 		PauseProvider: provider,
+		Activity:      systemActivity{},
 		RestMode:      a.ensureRestMode(),
 	})
 	a.engine.Start()
@@ -902,6 +1001,7 @@ func (a *App) restModeAutoComplete(ctx context.Context) {
 			return
 		case <-ticker.C:
 			a.tickRestMode()
+			a.tickPresentation(time.Now())
 		}
 	}
 }
@@ -972,6 +1072,12 @@ func restCompletionSettled(err error) bool {
 // 【为什么要缓存】macOS 的 SetMenu 会让菜单栏图标闪一下；空闲/无休息时每秒刷
 // 会看到菜单栏在抖。加一层 lastStatus 判等，代价是一次字符串比较，收益是稳定。
 func (a *App) refreshTrayIfChanged() {
+	a.refreshTray(false)
+}
+
+// refreshTray 重建菜单。force=true 用于「状态行没变、但菜单项文案变了」的场景
+// （例如进入/退出演示模式时，状态行可能仍被休息模式占用）。
+func (a *App) refreshTray(force bool) {
 	if a.trayInst == nil {
 		return
 	}
@@ -982,7 +1088,7 @@ func (a *App) refreshTrayIfChanged() {
 		a.lastTrayStatus = next
 	}
 	a.trayMu.Unlock()
-	if changed {
+	if changed || force {
 		a.trayInst.Refresh()
 	}
 }
@@ -1017,7 +1123,11 @@ func (a *App) trayStatusText() string {
 	}
 	if bundle := a.pauseSnapshot(); bundle != nil {
 		if st := bundle.Provider.State(); st.IsPaused() {
-			return "免打扰：" + pauseReasonZh(st.Reason)
+			label := pauseReasonZh(st.Reason)
+			if st.Reason == pause.ReasonPresentation && !captureProtectionSupported() {
+				label += "（捕获排除不可用）"
+			}
+			return "免打扰：" + label
 		}
 	}
 	return ""
@@ -1143,6 +1253,8 @@ func itoa(n int) string {
 // 三处（宠物气泡、菜单栏、Alert 覆盖层）都各自决定怎么呈现，不在数据层混入。
 func pauseReasonZh(r pause.PauseReason) string {
 	switch r {
+	case pause.ReasonPresentation:
+		return "演示中"
 	case pause.ReasonIdle:
 		return "空闲"
 	case pause.ReasonLock:
@@ -1495,6 +1607,39 @@ func (a *App) GetPetSettings() (config.PetSettings, error) {
 	return a.cfg.LoadPetSettings(), nil
 }
 
+// petShouldBeVisible 是宠物窗口是否应显示的唯一判断：
+// 用户显隐偏好 && 当前不在演示模式。
+//
+// 演示模式只改运行期可见性，不改写 cfg.PetVisible——用户把宠物藏起来的意图
+// 不该被一次会议覆盖。
+func (a *App) petShouldBeVisible() bool {
+	if a.cfg == nil {
+		return false
+	}
+	if a.presentation != nil && a.presentation.Snapshot().Active {
+		return false
+	}
+	return a.cfg.PetVisible
+}
+
+// applyPetPresentationVisibility 在演示模式切换时同步宠物窗口。
+//
+// 【为什么不调用 setPetVisible】那会写配置。这里只 Show/Hide 当前窗口；
+// 也不 restorePetFromDockLocked——贴边收起是用户的状态，退出演示后应原样恢复。
+func (a *App) applyPetPresentationVisibility() {
+	a.petMu.Lock()
+	defer a.petMu.Unlock()
+	w := a.petWindow()
+	if w == nil {
+		return
+	}
+	if a.petShouldBeVisible() {
+		w.Show()
+		return
+	}
+	w.Hide()
+}
+
 // SetPetSettings 保存宠物设置，并【立即】作用到宠物窗口：
 // 开关决定显示/隐藏，缩放决定窗口尺寸（画布放大后窗口不放大就会被裁掉）。
 //
@@ -1517,10 +1662,12 @@ func (a *App) SetPetSettings(in config.PetSettings) (string, error) {
 
 	if w != nil {
 		if in.PetVisible {
-			// 同 setPetVisible：先还原到展开位置，否则 Show 出来的是屏幕外那块。
-			a.restorePetFromDockLocked(w)
-			w.Show()
-			// 以底边 + 横向中心为锚换尺寸：宠物在屏幕上的落点不因缩放而跳。
+			if a.petShouldBeVisible() {
+				// 同 setPetVisible：先还原到展开位置，否则 Show 出来的是屏幕外那块。
+				a.restorePetFromDockLocked(w)
+				w.Show()
+			}
+			// 即使演示模式隐藏着，也把尺寸/位置更新好，退出时不会带着旧尺寸出现。
 			old := petWindowRect(w)
 			width, height := petWindowSize(a.cfg.PetScaleValue())
 			x := old.X + (old.W-width)/2
@@ -1530,6 +1677,9 @@ func (a *App) SetPetSettings(in config.PetSettings) (string, error) {
 			if wasBubble {
 				// 保持气泡形态：用旧预算按新基础高度重算，前端随后会再校准。
 				a.expandPetBubbleLocked(w, height+budget)
+			}
+			if !a.petShouldBeVisible() {
+				w.Hide()
 			}
 		} else {
 			w.Hide()
@@ -1553,10 +1703,10 @@ func (a *App) SetPetBubbleVisible(visible bool) error {
 		return apperr.NotFound("宠物窗口尚未创建")
 	}
 	if visible {
-		// 用户把宠物关掉时不做扩窗。不用 w.IsVisible()：macOS 的 occlusionState
+		// 用户把宠物关掉、或正在演示模式时不做扩窗。不用 w.IsVisible()：macOS 的 occlusionState
 		// 会把「可见但非前台」的宠物窗口报成不可见（实测启动阶段恒为 false），
-		// 用它会把适配整个拦掉。配置里的 PetVisible 是用户的真实意图。
-		if !a.cfg.PetVisible {
+		// 用它会把适配整个拦掉。petShouldBeVisible 才是用户的真实意图。
+		if !a.petShouldBeVisible() {
 			return nil
 		}
 		if a.petDockCollapsed() {
@@ -1583,8 +1733,9 @@ func (a *App) SetPetBubbleHeight(total int) error {
 	if !a.petBubbleActive {
 		return nil
 	}
-	// 与 SetPetBubbleVisible 同一道门槛：用户把宠物关掉后不再改隐藏窗口的尺寸。
-	if !a.cfg.PetVisible {
+	// 与 SetPetBubbleVisible 同一道门槛：用户把宠物关掉或正在演示模式时，
+	// 不再改隐藏窗口的尺寸。
+	if !a.petShouldBeVisible() {
 		return nil
 	}
 	a.expandPetBubbleLocked(w, total)
@@ -1676,12 +1827,179 @@ func (a *App) TogglePet() error {
 // GetPauseState 返回当前暂停状态（前端轮询用）。
 //
 // 宠物窗口每 4 秒轮询一次，用于显示「我先不打扰」气泡；菜单栏同理。
-// 未启用智能免打扰时返回 Paused=false。
+// 未启用智能免打扰时返回 Paused=false，但仍带回演示模式字段。
 func (a *App) GetPauseState() service.PauseState {
-	if a.svc == nil || a.svc.Pause() == nil {
-		return service.PauseState{Paused: false, Reason: ""}
+	state := service.PauseState{Paused: false, Reason: string(pause.ReasonNone)}
+	if a.svc != nil && a.svc.Pause() != nil {
+		state = a.svc.Pause().GetState()
 	}
-	return a.svc.Pause().GetState()
+	if a.presentation == nil {
+		return state
+	}
+	snap := a.presentation.Snapshot()
+	state.PresentationActive = snap.Active
+	state.PresentationSource = string(snap.Source)
+	state.SuggestionVisible = snap.SuggestionVisible
+	if !snap.ExitedAt.IsZero() {
+		state.PresentationExitedAt = snap.ExitedAt.Unix()
+	}
+	// 建议与捕获排除的字段在这里补齐；建议在 006 接入，捕获排除是平台能力。
+	state.CaptureExclusionSupported = captureProtectionSupported()
+	return state
+}
+
+// GetDeferralState 返回自然停顿顺延状态（宠物气泡用）。
+func (a *App) GetDeferralState() service.DeferralState {
+	out := service.DeferralState{Supported: pause.IdleSupported()}
+	if a.engine == nil {
+		return out
+	}
+	snap := a.engine.DeferralState()
+	out.Active = snap.Active
+	if !snap.Since.IsZero() {
+		out.Since = snap.Since.Unix()
+	}
+	return out
+}
+
+// SetPresentationMode 进入/退出演示模式。
+//
+// source 只在进入时使用：manual / suggested；退出时忽略。
+func (a *App) SetPresentationMode(active bool, source string) error {
+	return a.setPresentationMode(active, source)
+}
+
+// setPresentationMode 是绑定方法与托盘共用的唯一实现。
+func (a *App) setPresentationMode(active bool, source string) error {
+	if a.presentation == nil {
+		return apperr.New(apperr.CodeInternal, "演示模式状态未初始化")
+	}
+	if active {
+		src := presentation.Source(source)
+		if !src.Valid() {
+			return apperr.Validation("未知的演示模式来源: " + source)
+		}
+		a.presentation.Enter(src, time.Now())
+	} else {
+		a.presentation.Exit(time.Now())
+	}
+	a.applyPresentationToPause()
+	if active {
+		a.handleRestModeOnPresentationEnter()
+	}
+	a.applyPetPresentationVisibility()
+	if active {
+		if err := a.HideAlert(); err != nil {
+			// 启动早期 / headless 下强提醒窗口可能尚未创建；不让它阻断演示模式。
+			slog.Warn("进入演示模式时隐藏强提醒失败", "err", err)
+		}
+	}
+	a.refreshTray(true)
+	snap := a.presentation.Snapshot()
+	slog.Info("演示模式已切换", "active", snap.Active, "source", snap.Source)
+	return nil
+}
+
+// isPresentationActive 是演示模式的只读判断，供托盘与 Go 侧强提醒兜底复用。
+func (a *App) isPresentationActive() bool {
+	return a.presentation != nil && a.presentation.Snapshot().Active
+}
+
+// DismissPresentationSuggestion 记录用户忽略了本次「进入演示模式」建议。
+func (a *App) DismissPresentationSuggestion() error {
+	if a.presentation == nil {
+		return nil
+	}
+	a.presentation.DismissSuggestion()
+	return nil
+}
+
+// presentationTrigger 返回当前会议/全屏触发。
+//
+// 直接读 Meeting/Fullscreen 探测器，而不是 CompositeProvider.State()：
+// 演示模式激活时 composite 会返回 presentation，底层触发就看不见了；自动退出
+// 需要知道会议/全屏是否仍在。这里同时尊重用户对各信号的开关。
+func (a *App) presentationTrigger() presentation.Trigger {
+	bundle := a.pauseSnapshot()
+	if bundle == nil || a.cfg == nil {
+		return presentation.TriggerNone
+	}
+	if a.cfg.PauseMeetingEnabled && bundle.Meeting != nil &&
+		bundle.Meeting.Detect() == pause.ReasonMeeting {
+		return presentation.TriggerMeeting
+	}
+	if a.cfg.PauseFullscreenEnabled && bundle.Fullscreen != nil &&
+		bundle.Fullscreen.Detect() == pause.ReasonFullscreen {
+		return presentation.TriggerFullscreen
+	}
+	return presentation.TriggerNone
+}
+
+// tickPresentation 每秒推进建议/自动退出状态。
+//
+// 只有建议进入的演示模式会自动退出；手动进入的保持到用户手动退出。
+func (a *App) tickPresentation(now time.Time) {
+	if a.presentation == nil {
+		return
+	}
+	suggestEnabled := a.cfg != nil && a.cfg.PresentationSuggestEnabled
+	if a.presentation.Observe(a.presentationTrigger(), suggestEnabled, now) {
+		// 控制器已经把状态切到 off；这里只做与手动退出相同的可见性收尾。
+		a.applyPresentationToPause()
+		a.applyPetPresentationVisibility()
+		a.refreshTray(true)
+		slog.Info("演示模式自动退出")
+	}
+}
+
+// handleRestModeOnPresentationEnter 进入演示模式时结束进行中的休息会话。
+//
+// 预警只取消、不记录；倒计时走与「提前结束 → 不算」相同的路径，写 CheckIn(skip)
+// 并归零，不弹确认框。用户此刻在会议/共享屏幕里，没有条件完成一次拉伸。
+func (a *App) handleRestModeOnPresentationEnter() {
+	if a.restMode == nil {
+		return
+	}
+	switch a.restMode.State() {
+	case restmode.StateWarning:
+		a.restMode.CancelWarning()
+	case restmode.StateCountdown:
+		if _, err := a.SkipRestMode(); err != nil {
+			slog.Warn("进入演示模式时跳过休息模式失败", "err", err)
+		}
+	}
+}
+
+// togglePresentationMode 是托盘菜单的入口。
+func (a *App) togglePresentationMode() {
+	active := !a.isPresentationActive()
+	if err := a.setPresentationMode(active, string(presentation.SourceManual)); err != nil {
+		slog.Error("切换演示模式失败", "err", err)
+	}
+}
+
+// applyPresentationToPause 把控制器状态同步到当前 pause bundle。
+//
+// restartPauseBundle 会换掉整个 bundle；新 bundle 的 Presentation 默认关闭，
+// 故重建后必须再同步一次，否则「保存免打扰设置会把演示模式丢掉」。
+func (a *App) applyPresentationToPause() {
+	if a.presentation == nil {
+		return
+	}
+	active := a.presentation.Snapshot().Active
+	a.pauseMu.Lock()
+	defer a.pauseMu.Unlock()
+	if a.pause != nil && a.pause.Presentation != nil {
+		a.pause.Presentation.SetActive(active)
+	}
+}
+
+// applyPresentationToBundle 在 bundle 装配完成、尚未替换前同步演示状态。
+func (a *App) applyPresentationToBundle(b *pause.Bundle) {
+	if b == nil || b.Presentation == nil || a.presentation == nil {
+		return
+	}
+	b.Presentation.SetActive(a.presentation.Snapshot().Active)
 }
 
 // GetRestModeSnapshot 返回当前休息模式快照（Alert.vue 每次 tick 查询）。
@@ -1921,6 +2239,7 @@ func (a *App) restartPauseBundle() {
 		slog.Error("重建智能免打扰信号失败，保留原有配置继续运行", "err", err)
 		return
 	}
+	a.applyPresentationToBundle(bundle)
 	a.pauseMu.Lock()
 	old := a.pause
 	a.pause = bundle
@@ -1985,18 +2304,18 @@ func (a *App) setPetVisible(visible bool) error {
 	if w == nil {
 		return apperr.NotFound("宠物窗口尚未创建")
 	}
-	if visible {
+
+	a.cfg.PetVisible = visible
+	if err := a.cfg.Save(); err != nil {
+		slog.Error("保存宠物窗口开关失败", "err", err)
+	}
+	if a.petShouldBeVisible() {
 		// 若之前贴边收着，先把窗口移回展开位置再 Show：
 		// 否则用户看到的是屏幕外那块，会以为宠物丢了。
 		a.restorePetFromDockLocked(w)
 		w.Show()
 	} else {
 		w.Hide()
-	}
-
-	a.cfg.PetVisible = visible
-	if err := a.cfg.Save(); err != nil {
-		slog.Error("保存宠物窗口开关失败", "err", err)
 	}
 	slog.Info("宠物窗口可见性已更新", "visible", visible)
 	return nil

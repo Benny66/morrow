@@ -1,5 +1,7 @@
 # 竞品差异分析与功能优化（2026-10）
 
+> 第二轮分析见 `docs/competitive-analysis-round2.md`（目标用户收窄为中文办公人群，含痛点证据与功能候选）；本文保留为第一轮记录。
+
 > 范围：泛办公健康（久坐办公人群的喝水、起身、护眼、呼吸等日常保健提醒）。
 > 目标：先补齐竞品共同具备的基础能力，再保留并强化 Morrow 的差异化组合。
 > 相关决策：`docs/adr/0003-general-office-wellness.md`、`0004-smart-pause-local-signals-only.md`、`0005-p1-busy-free-only.md`。

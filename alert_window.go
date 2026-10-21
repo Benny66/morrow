@@ -151,6 +151,9 @@ func alertWindowOptions(name string, width, height int) application.WebviewWindo
 		Hidden:           true,
 		BackgroundType:   application.BackgroundTypeTransparent,
 		BackgroundColour: application.RGBA{},
+		// 强提醒遮罩排除出屏幕捕获：检测漏判时，共享画面里不会出现整块遮罩。
+		// Wails 在 macOS/Windows 有实现，Linux 为 no-op（设置页会显示不支持）。
+		ContentProtectionEnabled: true,
 		Mac: application.MacWindow{
 			DisableShadow: true,
 			Backdrop:      application.MacBackdropTransparent,

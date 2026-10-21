@@ -21,18 +21,20 @@ type Detector interface {
 //
 // 【为什么要有优先级】同一时刻可能多个信号并存（用户锁屏 + 系统判定空闲），
 // 单一 reason 只能选一个。选择原则是「越具体的信号越优先」：
+//   - 演示模式：用户主动进入，最高
 //   - 锁屏/休眠：人明确不在电脑前，最可信
 //   - 专注/日历：系统或日程层面已声明「不要打扰」
 //   - 会议应用：具体应用在前台，可信度高但可能误判
 //   - 全屏：窗口状态，最模糊（在看视频？在做演示？在工作？）
 //   - 空闲：只是键鼠没动，最弱
 var reasonPriority = map[PauseReason]int{
-	ReasonLock:       0,
-	ReasonFocus:      1,
-	ReasonCalendar:   2,
-	ReasonMeeting:    3,
-	ReasonFullscreen: 4,
-	ReasonIdle:       5,
+	ReasonPresentation: -1,
+	ReasonLock:         0,
+	ReasonFocus:        1,
+	ReasonCalendar:     2,
+	ReasonMeeting:      3,
+	ReasonFullscreen:   4,
+	ReasonIdle:         5,
 }
 
 // CompositeProvider 聚合多个 Detector，输出单一 State。

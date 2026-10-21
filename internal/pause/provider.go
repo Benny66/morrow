@@ -41,6 +41,9 @@ const (
 	ReasonFocus PauseReason = "focus"
 	// ReasonCalendar 日历当前忙碌（只读布尔状态，不读事件内容）。
 	ReasonCalendar PauseReason = "calendar"
+	// ReasonPresentation 演示模式：用户主动进入，或在会议/全屏时经建议进入。
+	// 优先级最高：用户的明确意图压过所有自动信号。
+	ReasonPresentation PauseReason = "presentation"
 )
 
 // State 是暂停信号的当前状态。

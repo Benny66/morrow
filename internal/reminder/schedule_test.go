@@ -305,7 +305,9 @@ type fakeStore struct {
 	initial map[uint]string
 	// snoozes 是"到点待补发"的推迟记录，读出后清空（模拟被处理掉）。
 	snoozes []DueFire
-	nextID  uint
+	// quiet 记录被标记为安静投递的 fireID。
+	quiet  map[uint]bool
+	nextID uint
 }
 
 func newFakeStore() *fakeStore {
@@ -313,6 +315,7 @@ func newFakeStore() *fakeStore {
 		claimed: map[string]bool{},
 		settled: map[uint]string{},
 		initial: map[uint]string{},
+		quiet:   map[uint]bool{},
 		nextID:  1,
 	}
 }
@@ -360,6 +363,13 @@ func (s *fakeStore) DueSnoozeFires(int64) ([]DueFire, error) {
 	due := s.snoozes
 	s.snoozes = nil
 	return due, nil
+}
+
+func (s *fakeStore) MarkQuietFire(fireID uint) {
+	if s.quiet == nil {
+		s.quiet = map[uint]bool{}
+	}
+	s.quiet[fireID] = true
 }
 
 // fireKey 拼唯一键，模拟数据库上的 (reminder_id, fire_at) 唯一索引。

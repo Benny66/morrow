@@ -28,6 +28,10 @@ type Handlers struct {
 	// OnShowPending 「查看待处理」入口：把主窗拉到前面并让 Home.vue 滚到待处理区。
 	// 与 OnShow 分开是为了让菜单栏里两个入口指向两个不同的心智（US-16）。
 	OnShowPending func()
+	// OnTogglePresentation 切换演示模式。
+	OnTogglePresentation func()
+	// PresentationActive 返回当前是否处于演示模式；用于菜单项文案「进入/退出」。
+	PresentationActive func() bool
 	// OnQuit 点"退出"时触发（优雅退出应用）。
 	OnQuit func()
 	// StatusLines 返回若干行当前状态文本（US-15 / US-17 / US-9 的菜单栏承载）。
@@ -127,6 +131,15 @@ func (i *Instance) rebuildMenu() {
 	if i.h.OnShowPending != nil {
 		menu.Add("查看待处理").OnClick(func(*application.Context) {
 			i.h.OnShowPending()
+		})
+	}
+	if i.h.OnTogglePresentation != nil {
+		label := "进入演示模式"
+		if i.h.PresentationActive != nil && i.h.PresentationActive() {
+			label = "退出演示模式"
+		}
+		menu.Add(label).OnClick(func(*application.Context) {
+			i.h.OnTogglePresentation()
 		})
 	}
 	menu.AddSeparator()

@@ -56,3 +56,6 @@ func GetIdleDuration() time.Duration {
 	idleMs := now - last
 	return time.Duration(idleMs) * time.Millisecond
 }
+
+// IdleSupported 返回当前平台是否提供空闲时长读取。
+func IdleSupported() bool { return true }

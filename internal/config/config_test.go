@@ -218,3 +218,93 @@ func TestSavePauseSettingsClampsIdleMinutes(t *testing.T) {
 		t.Errorf("IdleMinutes=8 应被夹到最近档位 10，实际 %d", cfg.PauseIdleMinutes)
 	}
 }
+
+// TestUninterruptedSettingsDefaults 演示建议与自然停顿顺延的默认值。
+// 默认开着：两者都是「不打扰」的温和增强，关掉会让新用户回到原始模式。
+func TestUninterruptedSettingsDefaults(t *testing.T) {
+	cfg := Default()
+	got := cfg.LoadReminderSettings()
+	if !got.PresentationSuggestEnabled {
+		t.Error("PresentationSuggestEnabled 默认应为 true")
+	}
+	if !got.NaturalPauseEnabled {
+		t.Error("NaturalPauseEnabled 默认应为 true")
+	}
+	if got.NaturalPauseMaxSeconds != DefaultNaturalPauseMaxSeconds {
+		t.Errorf("NaturalPauseMaxSeconds 默认 = %d，期望 %d",
+			got.NaturalPauseMaxSeconds, DefaultNaturalPauseMaxSeconds)
+	}
+}
+
+// TestUninterruptedSettingsRoundTrip 保存后三个字段 MUST 原样读回。
+func TestUninterruptedSettingsRoundTrip(t *testing.T) {
+	isolateHome(t)
+	cfg := Default()
+	cfg.path = filepath.Join(t.TempDir(), "config.json")
+
+	in := cfg.LoadReminderSettings()
+	in.PresentationSuggestEnabled = false
+	in.NaturalPauseEnabled = false
+	in.NaturalPauseMaxSeconds = 30
+	if err := cfg.SaveReminderSettings(in); err != nil {
+		t.Fatalf("SaveReminderSettings 失败: %v", err)
+	}
+
+	got := cfg.LoadReminderSettings()
+	if got.PresentationSuggestEnabled || got.NaturalPauseEnabled {
+		t.Errorf("布尔开关未按预期保存: %+v", got)
+	}
+	if got.NaturalPauseMaxSeconds != 30 {
+		t.Errorf("NaturalPauseMaxSeconds = %d，期望 30", got.NaturalPauseMaxSeconds)
+	}
+}
+
+// TestNaturalPauseMaxSecondsClamps 只接受 0/30/60；其他值回落默认 60。
+// 0 是合法值（关闭顺延），不能与「非法值」混为一谈。
+func TestNaturalPauseMaxSecondsClamps(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{0, 0},
+		{30, 30},
+		{60, 60},
+		{15, DefaultNaturalPauseMaxSeconds},
+		{-1, DefaultNaturalPauseMaxSeconds},
+		{999, DefaultNaturalPauseMaxSeconds},
+	}
+	for _, c := range cases {
+		isolateHome(t)
+		cfg := Default()
+		cfg.path = filepath.Join(t.TempDir(), "config.json")
+		in := cfg.LoadReminderSettings()
+		in.NaturalPauseMaxSeconds = c.in
+		if err := cfg.SaveReminderSettings(in); err != nil {
+			t.Fatalf("SaveReminderSettings 失败: %v", err)
+		}
+		if got := cfg.LoadReminderSettings().NaturalPauseMaxSeconds; got != c.want {
+			t.Errorf("NaturalPauseMaxSeconds(%d) = %d，期望 %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestShortcutPresentationRoundTrip 演示模式快捷键 MUST 落盘并可读回。
+func TestShortcutPresentationRoundTrip(t *testing.T) {
+	isolateHome(t)
+	cfg, err := Load("shortcuttest")
+	if err != nil {
+		t.Fatalf("Load 失败: %v", err)
+	}
+	cfg.ShortcutPresentation = "CmdOrCtrl+Shift+P"
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save 失败: %v", err)
+	}
+
+	reloaded, err := Load("shortcuttest")
+	if err != nil {
+		t.Fatalf("重新 Load 失败: %v", err)
+	}
+	if reloaded.ShortcutPresentation != "CmdOrCtrl+Shift+P" {
+		t.Errorf("ShortcutPresentation = %q，期望 CmdOrCtrl+Shift+P", reloaded.ShortcutPresentation)
+	}
+}

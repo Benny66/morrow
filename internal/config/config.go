@@ -44,6 +44,8 @@ const (
 	MinSnoozeMinutes = 1
 	// MaxSnoozeMinutes 见 MinSnoozeMinutes。
 	MaxSnoozeMinutes = 120
+	// DefaultNaturalPauseMaxSeconds 自然停顿顺延的默认上限（60 秒）；0 表示关闭。
+	DefaultNaturalPauseMaxSeconds = 60
 
 	// DefaultPauseIdleMinutes 默认空闲判定阈值（5 分钟）。
 	// 健康提醒的价值在于"别在离开时打扰"，5 分钟是"去倒杯水/上个洗手间"的典型时长。
@@ -95,6 +97,10 @@ type Config struct {
 	// 如 "CmdOrCtrl+Shift+Space"）。空串 = 不注册。
 	ShortcutToggleWindow string `json:"shortcut_toggle_window"`
 
+	// ShortcutPresentation 切换演示模式的全局快捷键（v3 accelerator 语法）。
+	// 空串 = 不注册。与唤起主窗快捷键冲突时注册失败，设置页如实显示。
+	ShortcutPresentation string `json:"shortcut_presentation"`
+
 	// MCPToken 运行时 MCP 服务的 Bearer token。仅 `-tags mcp` 构建且 WAILS_MCP=1
 	// 时有意义：非空则所有 MCP 请求（含 loopback）都要求鉴权（见 main.go 的透传）。
 	MCPToken string `json:"mcp_token"`
@@ -132,6 +138,15 @@ type Config struct {
 	// 一个而留着另一个（例如"别发通知，但到点就占满屏幕"）。
 	// 关闭后提醒仍然记录、仍然进待处理卡片——只是不再占屏。
 	StrongAlertEnabled bool `json:"strong_alert_enabled"`
+
+	// PresentationSuggestEnabled 是否在会议/全屏时由宠物建议进入演示模式。
+	PresentationSuggestEnabled bool `json:"presentation_suggest_enabled"`
+
+	// NaturalPauseEnabled 是否在用户输入时顺延非一次性提醒。
+	NaturalPauseEnabled bool `json:"natural_pause_enabled"`
+
+	// NaturalPauseMaxSeconds 顺延上限秒数：0 / 30 / 60；其他值回落默认 60。
+	NaturalPauseMaxSeconds int `json:"natural_pause_max_seconds"`
 
 	// PauseIdleEnabled 是否启用空闲暂停（连续 N 分钟无键鼠输入时自动暂停提醒）。
 	// 默认开启：这是「智能免打扰」的核心能力，关掉等于回到"到点就响"的原始模式。
@@ -212,6 +227,11 @@ func Default() *Config {
 		// 强提醒默认开着：本项的立项理由就是「通知太容易被忽略」，
 		// 默认关掉等于新用户第一次到点仍然什么都看不见（等于没做这个功能）。
 		StrongAlertEnabled: true,
+		// 演示建议与自然停顿顺延默认开着：两者都是「不打扰」的温和增强，
+		// 关闭后分别退回手动进入演示模式 / 到点即投递。
+		PresentationSuggestEnabled: true,
+		NaturalPauseEnabled:        true,
+		NaturalPauseMaxSeconds:     DefaultNaturalPauseMaxSeconds,
 		// 空闲暂停默认开着：这是「智能免打扰」的核心能力，关掉等于回到"到点就响"的原始模式。
 		PauseIdleEnabled: true,
 		// 空闲阈值默认 5 分钟：去倒杯水/上个洗手间的典型时长。
@@ -341,6 +361,12 @@ type ReminderSettings struct {
 	NotifyEnabled bool   `json:"notify_enabled"`
 	// StrongAlertEnabled 到点是否弹全屏强提醒（见 Config 的同名字段说明）。
 	StrongAlertEnabled bool `json:"strong_alert_enabled"`
+	// PresentationSuggestEnabled 会议/全屏时是否由宠物建议进入演示模式。
+	PresentationSuggestEnabled bool `json:"presentation_suggest_enabled"`
+	// NaturalPauseEnabled 是否在用户输入时顺延非一次性提醒。
+	NaturalPauseEnabled bool `json:"natural_pause_enabled"`
+	// NaturalPauseMaxSeconds 顺延上限秒数：0 / 30 / 60。
+	NaturalPauseMaxSeconds int `json:"natural_pause_max_seconds"`
 }
 
 // LoadReminderSettings 返回当前提醒行为设置（回显用，已归一化钟点写法）。
@@ -353,7 +379,10 @@ func (c *Config) LoadReminderSettings() ReminderSettings {
 		SnoozeMinutes: c.SnoozeMinutes,
 		NotifyEnabled: c.NotifyEnabled,
 		// 不回显夹取：强提醒开关是纯布尔，配置里没有"非法取值"这一态。
-		StrongAlertEnabled: c.StrongAlertEnabled,
+		StrongAlertEnabled:         c.StrongAlertEnabled,
+		PresentationSuggestEnabled: c.PresentationSuggestEnabled,
+		NaturalPauseEnabled:        c.NaturalPauseEnabled,
+		NaturalPauseMaxSeconds:     clampNaturalPauseMaxSeconds(c.NaturalPauseMaxSeconds),
 	}
 	// 配置文件是用户可写的，手改坏了不能把非法值回显给前端的选择器。
 	if startOK {
@@ -389,7 +418,19 @@ func (c *Config) SaveReminderSettings(in ReminderSettings) error {
 	c.SnoozeMinutes = in.SnoozeMinutes
 	c.NotifyEnabled = in.NotifyEnabled
 	c.StrongAlertEnabled = in.StrongAlertEnabled
+	c.PresentationSuggestEnabled = in.PresentationSuggestEnabled
+	c.NaturalPauseEnabled = in.NaturalPauseEnabled
+	c.NaturalPauseMaxSeconds = clampNaturalPauseMaxSeconds(in.NaturalPauseMaxSeconds)
 	return c.Save()
+}
+
+// PresentationShortcut 是演示模式快捷键的可绑定视图。
+//
+// Accelerator 回显配置值（即使注册失败也保留），Registered 表示当前进程是否
+// 真的把它注册到了系统。两者分开，设置页才能显示「已配置但未生效」。
+type PresentationShortcut struct {
+	Accelerator string `json:"accelerator"`
+	Registered  bool   `json:"registered"`
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +526,17 @@ func (c *Config) MarkFocusAsked() error {
 func (c *Config) MarkCalendarAsked() error {
 	c.CalendarAskedBefore = true
 	return c.Save()
+}
+
+// clampNaturalPauseMaxSeconds 只接受 0 / 30 / 60；其他值回落默认 60。
+// 0 是合法值（关闭顺延），不能当成非法值处理。
+func clampNaturalPauseMaxSeconds(v int) int {
+	switch v {
+	case 0, 30, 60:
+		return v
+	default:
+		return DefaultNaturalPauseMaxSeconds
+	}
 }
 
 // clampIdleMinutes 把任意输入夹到 3/5/10 三档中最接近的一档。

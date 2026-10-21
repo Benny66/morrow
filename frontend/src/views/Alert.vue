@@ -25,6 +25,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   CompleteReminder,
   CompleteRestMode,
+  GetPauseState,
   GetReminderSettings,
   GetRestModeSnapshot,
   HideAlert,
@@ -76,6 +77,10 @@ const ALERT_TICK_MS = 1000
 const pending = ref<PendingFire[]>([])
 /** 强提醒开关（属于【提醒设置】，不是宠物设置）。 */
 const strongAlertEnabled = ref(true)
+/** 演示模式：演示期间强提醒一律不显示（进入时后端已隐藏所有屏幕）。 */
+const presentationActive = ref(false)
+/** 最近一次退出演示模式的时间（Unix 秒）；0 表示从未退出。 */
+const presentationExitedAt = ref(0)
 /** 当前时间（毫秒），供倒计时每秒重算。 */
 const nowMs = ref(Date.now())
 /** 是否正在执行打卡动作：防止一次点击被重复提交。 */
@@ -212,6 +217,20 @@ async function loadStrongAlertSetting(): Promise<void> {
   }
 }
 
+/** 读取演示模式状态；读不到时按「未演示」处理，让强提醒照常工作。 */
+async function loadPresentationState(): Promise<void> {
+  try {
+    const state = await invoke(() => GetPauseState(), 'GetPauseState')
+    presentationActive.value = state.presentation_active
+    presentationExitedAt.value = state.presentation_exited_at ?? 0
+  } catch (e) {
+    // 读不到时按「未演示 + 不抑制」处理：宁可显示提醒，也不要静默吞掉。
+    presentationActive.value = false
+    presentationExitedAt.value = 0
+    logWarn('读取演示模式状态失败，按未演示处理', { err: String(e) })
+  }
+}
+
 /**
  * 重新拉取待处理列表，返回条数。
  *
@@ -225,9 +244,15 @@ async function loadStrongAlertSetting(): Promise<void> {
 async function refreshPending(): Promise<number> {
   try {
     const list = (await invoke(() => ListPendingFires(), 'ListPendingFires')) ?? []
-    pending.value = list
+    // 安静投递（自然停顿顺延到上限）只进首页待处理，不触发全屏强提醒。
+    const nonQuiet = list.filter((item) => !item.quiet_delivery)
+    // 退出演示后不补弹演示前/期间产生的旧待处理：只让退出之后新到点的提醒
+    // 触发强提醒。旧条目仍在首页待处理区，用户主动打开就能看到。
+    const exitAt = presentationExitedAt.value
+    const visible = exitAt > 0 ? nonQuiet.filter((item) => item.fire_at > exitAt) : nonQuiet
+    pending.value = visible
     syncTicker()
-    return list.length
+    return visible.length
   } catch (e) {
     logWarn('读取待处理提醒失败', { err: String(e) })
     return pending.value.length
@@ -261,13 +286,22 @@ async function hideWindow(): Promise<void> {
  * 所有入口（挂载、两个事件、三个按钮、窗口重新可见）都走这里，
  * 才不会出现"A 路径显示、B 路径该隐藏却忘了"这类不对称。
  *
- * 优先级：休息模式 > 强提醒开关 > 卡片。
- * 【为什么休息模式排在最前】stand/move/rest 到点时的引导倒计时本身就是「用户
- * 明确要看到的动作指引」，与「water 类要不要弹」是两个开关管的两件事；
+ * 优先级：演示模式 > 休息模式 > 强提醒开关 > 卡片。
+ * 【为什么演示模式排最前】共享屏幕时整块遮罩会直接泄露给观看者；即使休息
+ * 倒计时还在跑，也必须先收起，宁可少一次引导也不能被看见。
+ * 【为什么休息模式排在强提醒开关前】stand/move/rest 到点时的引导倒计时本身就是
+ * 「用户明确要看到的动作指引」，与「water 类要不要弹」是两个开关管的两件事；
  * 让 StrongAlertEnabled=false 关掉休息倒计时会把「起身拉伸」的功能砍掉一半。
  */
 async function syncVisibility(): Promise<void> {
   await refreshRestSnapshot()
+  await loadPresentationState()
+  if (presentationActive.value) {
+    // 刷新 pending 只为退出后状态准确；当前一律收起，不显示旧提醒。
+    await refreshPending()
+    await hideWindow()
+    return
+  }
   if (restActive.value) {
     // 休息模式覆盖层自带倒计时；pending 也要刷（用于结束后立刻收），
     // 但不受强提醒开关影响。

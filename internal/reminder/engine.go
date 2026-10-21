@@ -36,6 +36,8 @@ type Options struct {
 	Now func() time.Time
 	// PauseProvider 暂停信号提供者；nil 表示不启用智能免打扰（始终正常投递）。
 	PauseProvider pause.Provider
+	// Activity 输入活跃度提供者；nil 表示平台不支持自然停顿顺延。
+	Activity ActivityProvider
 	// RestMode 休息模式状态机；nil 表示禁用休息模式（所有 kind 走简单提醒）。
 	// 只有 stand/move/rest 三类会尝试进入；其余 kind 不受影响（见 dispatch 分支）。
 	RestMode *restmode.Machine
@@ -54,6 +56,7 @@ type Engine struct {
 	emitter       Emitter
 	now           func() time.Time
 	pauseProvider pause.Provider
+	activity      ActivityProvider
 	restMode      *restmode.Machine
 
 	mu     sync.Mutex
@@ -68,19 +71,26 @@ type Engine struct {
 	// 上百次注定冲突的写入）。备忘为空时（如刚重启）首轮 tick 会重放当天全部
 	// 时间点，其中已处理的会被唯一索引挡下，因此不会重复弹窗。
 	claimed map[uint]map[int64]bool
+	// gridDeferrals / snoozeDeferrals 是自然停顿顺延的内存状态。
+	// 不落库：应用重启后按正常规则投递，符合 B-11 的取舍。
+	gridDeferrals   map[uint]deferral
+	snoozeDeferrals map[uint]deferral
 }
 
 // NewEngine 构造调度引擎（不启动）。
 func NewEngine(opts Options) *Engine {
 	engine := &Engine{
-		store:         opts.Store,
-		settings:      opts.Settings,
-		notifier:      opts.Notifier,
-		emitter:       opts.Emitter,
-		now:           opts.Now,
-		pauseProvider: opts.PauseProvider,
-		restMode:      opts.RestMode,
-		claimed:       map[uint]map[int64]bool{},
+		store:           opts.Store,
+		settings:        opts.Settings,
+		notifier:        opts.Notifier,
+		emitter:         opts.Emitter,
+		now:             opts.Now,
+		pauseProvider:   opts.PauseProvider,
+		activity:        opts.Activity,
+		restMode:        opts.RestMode,
+		claimed:         map[uint]map[int64]bool{},
+		gridDeferrals:   map[uint]deferral{},
+		snoozeDeferrals: map[uint]deferral{},
 	}
 	if engine.now == nil {
 		engine.now = time.Now
@@ -200,6 +210,10 @@ func (e *Engine) Tick() {
 			paused = true
 			slog.Info("智能免打扰生效", "reason", state.Reason, "since", state.Since)
 		}
+	}
+	if paused {
+		// 暂停优先于顺延：进入暂停后旧的顺延不再有意义，清掉避免恢复后误投。
+		e.clearDeferrals()
 	}
 
 	if err := e.tickOneOffs(now, settings, paused); err != nil {
@@ -355,7 +369,7 @@ func (e *Engine) tickOneOffs(now time.Time, settings Settings, paused bool) erro
 			Kind:       item.Kind,
 			IsOneOff:   true,
 			FireAt:     item.OnceAt,
-		}, now, settings, false)
+		}, now, settings, false, false)
 	}
 	// 错过的项没有 fired 事件，但列表状态已经变了；不广播的话首页会一直把
 	// 它显示成「即将到来」，直到用户手动刷新或发生别的变更。
@@ -381,6 +395,7 @@ func (e *Engine) tickGrid(now time.Time, settings Settings, quiet bool, paused b
 	// 没有启用场景 = 不该有任何提醒。这是"停用场景后世界立刻安静"的实现方式：
 	// 引擎不再看这些提醒项，而残留的待处理卡片仍可由用户处理完。
 	if scenario == nil {
+		e.clearGridDeferrals()
 		return nil
 	}
 	reminders, err := e.store.ActiveReminders(scenario.ID)
@@ -388,82 +403,123 @@ func (e *Engine) tickGrid(now time.Time, settings Settings, quiet bool, paused b
 		return err
 	}
 
+	seen := make(map[uint]bool, len(reminders))
 	for _, item := range reminders {
-		points := FirePoints(now, item.WindowStart, item.WindowEnd, item.IntervalMin)
-		if len(points) == 0 {
-			continue
-		}
-		// claimedPoint 是"这一轮新占用到的"触发点。
-		type claimedPoint struct {
-			fireID uint
-			fireAt int64
-		}
-		fresh := make([]claimedPoint, 0, len(points))
-		nowUnix := now.Unix()
-		isDaily := item.IntervalMin == 0
-		for _, point := range points {
-			if point > nowUnix {
-				break // 未来的点留给后续 tick
-			}
-			if e.isClaimed(item.ID, point) {
-				continue
-			}
-			// 暂停期间的周期项：claim 为 FireSilent，让它「已处理」，恢复后
-			// 下一 tick 不会再看到它；下一个点按原间隔重新计时——「顺延不补发」。
-			// 【为什么不能只内存 markClaimed】内存备忘一重启就没了，DB 里这个点
-			// 没记录，恢复后第一次 tick 就会把它捞回来 fired——「不补发」当场失效。
-			if paused && !isDaily {
-				if _, _, claimErr := e.store.ClaimFireWithStatus(item.ID, point, model.FireSilent); claimErr != nil {
-					slog.Warn("暂停期占用周期点失败", "reminder_id", item.ID, "fire_at", point, "err", claimErr)
-					continue
-				}
-				e.markClaimed(item.ID, point)
-				continue
-			}
-			initialStatus := model.FireFired
-			if paused && isDaily {
-				initialStatus = model.FireMissed
-			}
-			fireID, claimed, claimErr := e.store.ClaimFireWithStatus(item.ID, point, initialStatus)
-			if claimErr != nil {
-				slog.Error("占用提醒触发点失败", "reminder_id", item.ID, "fire_at", point, "err", claimErr)
-				continue
-			}
-			// 无论是否抢到都记进备忘：抢不到说明这个点历史上已处理过。
-			e.markClaimed(item.ID, point)
-			if claimed {
-				fresh = append(fresh, claimedPoint{fireID: fireID, fireAt: point})
-			}
-		}
-		if len(fresh) == 0 {
-			continue
-		}
-
-		// 【补发策略】只送达最近 1 条，其余直接判 missed。
-		// 这是"合上盖子睡两小时后打开，一次弹十几条通知"的唯一防线。
-		// 想改成全部送达之前请先想清楚：用户会因此关掉整类通知。
-		latest := fresh[len(fresh)-1]
-		for _, stale := range fresh[:len(fresh)-1] {
-			if settleErr := e.store.SettleFire(stale.fireID, model.FireMissed, 0); settleErr != nil {
-				slog.Warn("标记错过提醒失败", "fire_id", stale.fireID, "err", settleErr)
-			}
-		}
-		// 每日单点在暂停期已经在 claim 时落 missed；不投递、不广播 fired。
-		if paused && isDaily {
-			continue
-		}
-		e.dispatch(DueFire{
-			FireID:       latest.fireID,
-			ReminderID:   item.ID,
-			ScenarioID:   scenario.ID,
-			ScenarioName: scenario.Name,
-			Title:        item.Title,
-			Content:      item.Content,
-			Kind:         item.Kind,
-			FireAt:       latest.fireAt,
-		}, now, settings, quiet)
+		seen[item.ID] = true
+		e.tickGridReminder(scenario, item, now, settings, quiet, paused)
 	}
+	e.mu.Lock()
+	e.pruneGridDeferralsLocked(seen)
+	e.mu.Unlock()
 	return nil
+}
+
+// tickGridReminder 处理单条周期提醒：算到期点 → 自然停顿裁决 → claim → 只送达最近 1 条。
+//
+// 从 tickGrid 抽出：暂停、顺延、补发策略各自有完整注释，混在一个循环里会越来越难读。
+func (e *Engine) tickGridReminder(
+	scenario *model.Scenario,
+	item model.Reminder,
+	now time.Time,
+	settings Settings,
+	quiet bool,
+	paused bool,
+) {
+	points := FirePoints(now, item.WindowStart, item.WindowEnd, item.IntervalMin)
+	if len(points) == 0 {
+		return
+	}
+	// claimedPoint 是"这一轮新占用到的"触发点。
+	type claimedPoint struct {
+		fireID uint
+		fireAt int64
+	}
+	fresh := make([]claimedPoint, 0, len(points))
+	nowUnix := now.Unix()
+	isDaily := item.IntervalMin == 0
+	hasDue := false
+	for _, point := range points {
+		if point > nowUnix {
+			break
+		}
+		if !e.isClaimed(item.ID, point) {
+			hasDue = true
+			break
+		}
+	}
+	// 自然停顿顺延：用户正在输入时不 claim，等停手或到上限再处理。
+	// 暂停优先：paused 时走下面的既定暂停分支，不进入顺延。
+	mode := deliveryNormal
+	if !paused {
+		mode = e.deferralMode(scopeGrid, item.ID, now, settings, hasDue)
+		if mode == deliveryDeferMore {
+			return
+		}
+	}
+	if !hasDue {
+		return
+	}
+	for _, point := range points {
+		if point > nowUnix {
+			break // 未来的点留给后续 tick
+		}
+		if e.isClaimed(item.ID, point) {
+			continue
+		}
+		// 暂停期间的周期项：claim 为 FireSilent，让它「已处理」，恢复后
+		// 下一 tick 不会再看到它；下一个点按原间隔重新计时——「顺延不补发」。
+		// 【为什么不能只内存 markClaimed】内存备忘一重启就没了，DB 里这个点
+		// 没记录，恢复后第一次 tick 就会把它捞回来 fired——「不补发」当场失效。
+		if paused && !isDaily {
+			if _, _, claimErr := e.store.ClaimFireWithStatus(item.ID, point, model.FireSilent); claimErr != nil {
+				slog.Warn("暂停期占用周期点失败", "reminder_id", item.ID, "fire_at", point, "err", claimErr)
+				continue
+			}
+			e.markClaimed(item.ID, point)
+			continue
+		}
+		initialStatus := model.FireFired
+		if paused && isDaily {
+			initialStatus = model.FireMissed
+		}
+		fireID, claimed, claimErr := e.store.ClaimFireWithStatus(item.ID, point, initialStatus)
+		if claimErr != nil {
+			slog.Error("占用提醒触发点失败", "reminder_id", item.ID, "fire_at", point, "err", claimErr)
+			continue
+		}
+		// 无论是否抢到都记进备忘：抢不到说明这个点历史上已处理过。
+		e.markClaimed(item.ID, point)
+		if claimed {
+			fresh = append(fresh, claimedPoint{fireID: fireID, fireAt: point})
+		}
+	}
+	if len(fresh) == 0 {
+		return
+	}
+
+	// 【补发策略】只送达最近 1 条，其余直接判 missed。
+	// 这是"合上盖子睡两小时后打开，一次弹十几条通知"的唯一防线。
+	// 想改成全部送达之前请先想清楚：用户会因此关掉整类通知。
+	latest := fresh[len(fresh)-1]
+	for _, stale := range fresh[:len(fresh)-1] {
+		if settleErr := e.store.SettleFire(stale.fireID, model.FireMissed, 0); settleErr != nil {
+			slog.Warn("标记错过提醒失败", "fire_id", stale.fireID, "err", settleErr)
+		}
+	}
+	// 每日单点在暂停期已经在 claim 时落 missed；不投递、不广播 fired。
+	if paused && isDaily {
+		return
+	}
+	e.dispatch(DueFire{
+		FireID:       latest.fireID,
+		ReminderID:   item.ID,
+		ScenarioID:   scenario.ID,
+		ScenarioName: scenario.Name,
+		Title:        item.Title,
+		Content:      item.Content,
+		Kind:         item.Kind,
+		FireAt:       latest.fireAt,
+	}, now, settings, quiet, mode == deliveryQuiet)
 }
 
 // tickSnoozes 补发到点的推迟记录。
@@ -475,14 +531,28 @@ func (e *Engine) tickSnoozes(now time.Time, settings Settings, quiet bool) error
 	if err != nil {
 		return err
 	}
+	seen := make(map[uint]bool, len(due))
 	for _, fire := range due {
-		e.dispatch(fire, now, settings, quiet)
+		seen[fire.FireID] = true
+		mode := e.deferralMode(scopeSnooze, fire.FireID, now, settings, true)
+		if mode == deliveryDeferMore {
+			continue
+		}
+		e.dispatch(fire, now, settings, quiet, mode == deliveryQuiet)
 	}
+	// 与周期提醒对称：触发记录消失后，别让顺延表留孤儿。
+	e.mu.Lock()
+	e.pruneSnoozeDeferralsLocked(seen)
+	e.mu.Unlock()
 	return nil
 }
 
 // dispatch 送达一条提醒：落状态 → 发通知 → 广播事件。
-func (e *Engine) dispatch(fire DueFire, now time.Time, settings Settings, quiet bool) {
+//
+// quiet 是静默时段（只记录不打扰）；quietDelivery 是自然停顿顺延到上限后的
+// 安静投递（仍然通知/进待处理，但不弹全屏、不进休息模式）。两者语义不同，
+// 参数名刻意分开，避免再次出现"同名不同义"。
+func (e *Engine) dispatch(fire DueFire, now time.Time, settings Settings, quiet bool, quietDelivery bool) {
 	// 静默时段：照常记录（统计里能看到这段时间确实有过提醒），但不打扰。
 	// 一次性提醒例外：用户明确指定了时刻，静默设置不应把它吞掉。
 	// 顺序仍是"先落库再判断"，因为 silent 本身也是一个要落库的终态。
@@ -502,6 +572,10 @@ func (e *Engine) dispatch(fire DueFire, now time.Time, settings Settings, quiet 
 		slog.Error("记录提醒触发失败", "fire_id", fire.FireID, "err", err)
 		return
 	}
+	if quietDelivery {
+		// 让待处理列表带上 quiet_delivery，Alert 窗口即使错过 fired 事件也不会误弹。
+		e.store.MarkQuietFire(fire.FireID)
+	}
 
 	// 尝试进入休息模式（stand/move/rest 三类）。返回 true 表示已进入。
 	//
@@ -511,7 +585,7 @@ func (e *Engine) dispatch(fire DueFire, now time.Time, settings Settings, quiet 
 	// 这条 move 就该走「普通提醒 + 待处理卡片」通道——用户可以看到有第二条在等，
 	// 而不是让这条彻底静默丢失。
 	inRestMode := false
-	if e.restMode != nil && restmode.IsRestKind(fire.Kind) {
+	if !quietDelivery && e.restMode != nil && restmode.IsRestKind(fire.Kind) {
 		dur := restmode.CueFor(fire.Kind).Duration
 		inRestMode = e.restMode.Enter(restmode.RestRequest{
 			FireID:     fire.FireID,
@@ -539,17 +613,18 @@ func (e *Engine) dispatch(fire DueFire, now time.Time, settings Settings, quiet 
 
 	if e.emitter != nil {
 		e.emitter.EmitFired(FiredPayload{
-			FireID:     fire.FireID,
-			ReminderID: fire.ReminderID,
-			ScenarioID: fire.ScenarioID,
-			Title:      fire.Title,
-			Content:    fire.Content,
-			Kind:       fire.Kind,
-			IsOneOff:   fire.IsOneOff,
-			FireAt:     fire.FireAt,
+			FireID:        fire.FireID,
+			ReminderID:    fire.ReminderID,
+			ScenarioID:    fire.ScenarioID,
+			Title:         fire.Title,
+			Content:       fire.Content,
+			Kind:          fire.Kind,
+			IsOneOff:      fire.IsOneOff,
+			FireAt:        fire.FireAt,
+			QuietDelivery: quietDelivery,
 		})
 	}
-	slog.Info("提醒已送达", "reminder", fire.Title, "fire_at", fire.FireAt, "rest_mode", inRestMode)
+	slog.Info("提醒已送达", "reminder", fire.Title, "fire_at", fire.FireAt, "rest_mode", inRestMode, "quiet_delivery", quietDelivery)
 }
 
 // rollDay 在跨自然日时清空内存备忘。
@@ -562,6 +637,7 @@ func (e *Engine) rollDay(now time.Time) {
 	}
 	e.lastDay = key
 	e.claimed = map[uint]map[int64]bool{}
+	e.clearDeferralsLocked()
 }
 
 // isClaimed 查询内存备忘。

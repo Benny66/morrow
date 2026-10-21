@@ -43,6 +43,8 @@ export interface ReminderFiredPayload {
   is_one_off: boolean
   /** 计划触发时间（Unix 秒）。 */
   fire_at: number
+  /** 是否为顺延到上限后的安静投递（不弹全屏强提醒，也不进休息模式）。 */
+  quiet_delivery: boolean
 }
 
 /** reminder:changed 的载荷（镜像 Go 的 reminder.ChangedPayload）。 */

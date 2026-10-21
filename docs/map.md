@@ -9,6 +9,8 @@
 | `main.go` | 应用入口，wails 启动配置（窗口/绑定/assets/错误格式化） |
 | `app.go` | App 结构体与绑定方法（前端可直接调用的 Go 方法都在这） |
 | `pet_window.go` | 桌面宠物窗口的建窗参数与尺寸换算（透明 + 置顶 + 位置还原） |
+| `pet_bubble.go` | 宠物气泡扩窗的窗口接线（工作区选择、扩窗状态、还原、持久化反算） |
+| `pet_bubble_geometry.go` | 气泡扩窗的几何纯函数（底边锚定 / 工作区夹取 / 基础矩形反算） |
 | `AGENTS.md` | 跨端通用铁律 |
 | `CLAUDE.md` | Go 域规范 |
 | `frontend/CLAUDE.md` | Vue 域规范 |
@@ -91,8 +93,11 @@
 | `openspec/specs/` | 能力规格基线（唯一真相） |
 | `openspec/changes/` | 进行中的变更提案 |
 | `docs/specs/` | `to-spec` 产出的规格说明书（供拆任务） |
-| `docs/competitive-analysis.md` | 竞品差异与本轮基础能力补齐的取舍（2026-10） |
+| `docs/competitive-analysis.md` | 第一轮竞品差异与基础能力补齐的取舍（2026-10） |
+| `docs/competitive-analysis-round2.md` | 第二轮竞品差异、用户痛点证据与功能候选（2026-10） |
 | `docs/specs/2026-10-20-baseline-parity.md` | 本轮规格：智能免打扰 + 场景化休息模式 + 桌面集成（P0/P1） |
+| `docs/specs/2026-10-21-uninterrupted-slice.md` | 「不被打断」切片规格：演示模式 + 自然停顿顺延 |
+| `docs/specs/2026-10-21-pet-bubble-expansion-and-refresh.md` | 宠物气泡扩窗 + 打卡刷新 + 休息结算规格 |
 | `docs/adr/` | 不可逆决策记录（如一次性提醒独立于场景） |
 | `CONTEXT.md` | 领域术语表（一次性 / 每日单点 / 快速添加等） |
 | `docs/代码规范.md` | 命名与管道契约的编码约定 |

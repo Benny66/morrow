@@ -136,7 +136,9 @@ func (e appEmitter) EmitFired(payload reminder.FiredPayload) {
 	// 事件照旧广播（前端据此渲染内容），再补一次 Go 侧的"把窗口推出来"。
 	// 放在 Emit 之后：让前端的快速路径先跑，兜底只在它没动静时才有实际效果
 	// （Show() 对已可见窗口是幂等的，不会造成重复显示）。
-	if alertShowHook != nil {
+	//
+	// 安静投递（自然停顿顺延到上限）不推全屏窗：它只应进通知与待处理卡片。
+	if alertShowHook != nil && !payload.QuietDelivery {
 		alertShowHook()
 	}
 }
