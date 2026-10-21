@@ -127,6 +127,11 @@ func (a *App) watchPetPosition(ctx context.Context) {
 			if a.petDockCollapsed() {
 				continue
 			}
+			// 扩窗是程序化移动（向上长、向两侧长），不是用户拖动；
+			// 此期间不做贴边判定，否则气泡一出现就可能把宠物吸到边上。
+			if a.petBubbleExpanded() {
+				continue
+			}
 			// 刚展开：窗口回到的位置仍贴着边（那正是当初触发吸附的地方），
 			// 不跳过这一轮就会立刻被重新吸附——表现为"划过闪一下又藏回去"。
 			if time.Now().UnixMilli() < a.petDockIgnoreUntil.Load() {
@@ -141,7 +146,9 @@ func (a *App) watchPetPosition(ctx context.Context) {
 
 			// 展开后一直停在展开位置 → 说明没有新的一次拖动，不要重复吸附。
 			// 这条与 ignoreUntil 是两道独立的防线：前者管"停在原地"，后者管"刚展开的瞬间"。
-			if a.petDockAtHome(x, y) {
+			// 比较基础矩形而不是窗口矩形：扩窗会改变窗口位置/尺寸，误判成拖动
+			// 会让气泡一出现就被重新吸附。
+			if a.petDockAtHome(x, y, width, height) {
 				continue
 			}
 
@@ -169,16 +176,25 @@ func (a *App) watchPetPosition(ctx context.Context) {
 // 也负责"用户把宠物从边缘拖走了"这个反向情况：此时清掉贴边状态，
 // 否则下次鼠标划过会莫名其妙地把它收回一个早已不相关的边。
 func (a *App) tryDockPet(x, y, width, height int) {
-	side, dockX, dockY := a.petDockTarget(x, y, width, height)
-	if side == "" {
-		a.clearPetDock()
-		return
-	}
-
 	a.petMu.Lock()
 	defer a.petMu.Unlock()
 	w := a.petWindow()
 	if w == nil {
+		return
+	}
+
+	// 扩窗中贴边：先按基础几何还原。「收起」本来就是无气泡形态，且吸附位置
+	// 必须按基础矩形计算，否则露出屏幕的 20px 会错位。
+	if a.petBubbleActive {
+		baseW, baseH := petWindowSize(a.cfg.PetScaleValue())
+		base := petBaseRect(petRect{X: x, Y: y, W: width, H: height}, baseW, baseH)
+		a.restorePetBubbleAtLocked(w, base)
+		x, y, width, height = base.X, base.Y, base.W, base.H
+	}
+
+	side, dockX, dockY := a.petDockTarget(x, y, width, height)
+	if side == "" {
+		a.clearPetDock()
 		return
 	}
 
@@ -250,13 +266,16 @@ func (a *App) petDockCollapsed() bool {
 // petDockAtHome 报告窗口是否正停在"展开位置"（说明用户没有开始新的拖动）。
 //
 // 只对贴过边的宠物成立：从未贴边的宠物没有 home 可言，这里返回 false 让它照常检测。
-func (a *App) petDockAtHome(x, y int) bool {
+// 比较基础矩形：扩窗会改变窗口位置与尺寸，按窗口矩形比较会把「气泡出现」误判成拖动。
+func (a *App) petDockAtHome(x, y, width, height int) bool {
+	baseW, baseH := petWindowSize(a.cfg.PetScaleValue())
+	base := petBaseRect(petRect{X: x, Y: y, W: width, H: height}, baseW, baseH)
 	a.petDockMu.Lock()
 	defer a.petDockMu.Unlock()
 	return a.petDock.side != "" &&
 		!a.petDock.collapsed &&
-		a.petDock.homeX == x &&
-		a.petDock.homeY == y
+		a.petDock.homeX == base.X &&
+		a.petDock.homeY == base.Y
 }
 
 // emitPetDock 广播贴边状态。

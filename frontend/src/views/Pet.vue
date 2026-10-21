@@ -10,7 +10,7 @@
 //
 // 状态与事件：只订阅【既有】事件 reminder:fired / reminder:changed（见 lib/reminder），
 // 不为宠物新增事件常量——事件契约里没有宠物域，多一个域就多一处镜像要维护。
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Window } from '@wailsio/runtime'
 import {
   CollapsePet,
@@ -23,6 +23,8 @@ import {
   GetRestModeSnapshot,
   ListPendingFires,
   OpenMainWindow,
+  SetPetBubbleHeight,
+  SetPetBubbleVisible,
   SnoozeReminder,
 } from '../../bindings/morrow/app.js'
 import { invoke } from '../lib/invoke'
@@ -35,6 +37,7 @@ import {
   FRAME_W,
   PET_ANIM_ROW,
   PET_AUTO_COLLAPSE_MS,
+  PET_BUBBLE_FIT_WAIT_MS,
   PET_CELEBRATE_MS,
   PET_CLICK_MAX_TRAVEL_PX,
   PET_COLS,
@@ -111,6 +114,150 @@ const bubbleText = ref('')
  * 事件到达时先留空（那一瞬气泡只有标题），异步刷新后补齐。
  */
 const bubbleScenario = ref('')
+
+/** 是否正在提交打卡动作：防止一次点击被重复提交（后端会拒绝重复打卡，但请求不该成串发出）。 */
+const busy = ref(false)
+
+/**
+ * 气泡内的失败提示；空串表示不显示。
+ *
+ * 【为什么要有它】动作失败时只写日志，用户看到的是「点了没反应」；这条文案
+ * 把失败变成可见事实。已被别处处理的场景走自愈路径，不显示这条。
+ */
+const bubbleError = ref('')
+
+// ---- 气泡扩窗的运行时句柄 ----
+
+/** 当前可见气泡的 DOM 引用（四个互斥分支共用；同一时刻只有一个挂载）。 */
+const bubbleRef = ref<HTMLElement | null>(null)
+/** 宠物本体：测量气泡需求时要用它的实际高度。 */
+const petArtRef = ref<HTMLElement | null>(null)
+/** 上次上报给 Go 的气泡总高度；相同值不重复调用。 */
+let lastBubbleNeed = -1
+/** 气泡尺寸观察器；气泡切换/卸载时重建。 */
+let bubbleObserver: ResizeObserver | undefined
+/** 适配是否正在执行；并发触发只排队一次，避免旧的测量结果最后落地。 */
+let bubbleFitRunning = false
+let bubbleFitQueued = false
+
+/**
+ * 把气泡的绝对需求换算成窗口总高度。
+ *
+ * 用 DOM 实测而不是复制 CSS 常量：内边距、间距、字号一旦调整，这里自动跟随。
+ * 气泡被窗口顶部裁掉时 offsetHeight 仍是完整高度，故不会越量越矮。
+ */
+function measureBubbleNeed(bubble: HTMLElement): number {
+  const art = petArtRef.value
+  const petEl = bubble.parentElement
+  if (!art || !petEl) return 0
+  const styles = getComputedStyle(petEl)
+  const padTop = parseFloat(styles.paddingTop) || 0
+  const padBottom = parseFloat(styles.paddingBottom) || 0
+  // 间距用两块的实际几何差，而不是读 row-gap：跨引擎的 flex gap 取值更稳，
+  // 且气泡被顶部裁掉时 getBoundingClientRect 仍是完整盒子。
+  const gap = Math.max(0, art.getBoundingClientRect().top - bubble.getBoundingClientRect().bottom)
+  return Math.ceil(padTop + bubble.offsetHeight + gap + art.offsetHeight + padBottom)
+}
+
+/**
+ * 让窗口适配当前气泡：先加宽，下一帧按实际宽度测量，再设置高度。
+ *
+ * 【为什么先加宽再测量】气泡的换行行数取决于窗口宽度。先按窄窗量会得到一个
+ * 过高的窗口，再被宽度变化纠正，用户会看到一次多余的跳变。
+ */
+async function applyBubbleFit(): Promise<void> {
+  if (bubbleFitRunning) {
+    bubbleFitQueued = true
+    return
+  }
+  bubbleFitRunning = true
+  try {
+    do {
+      bubbleFitQueued = false
+      await fitBubbleOnce()
+    } while (bubbleFitQueued)
+  } finally {
+    bubbleFitRunning = false
+  }
+}
+
+/** 单轮适配。串行化由 applyBubbleFit 负责。 */
+async function fitBubbleOnce(): Promise<void> {
+  // 拖拽手势中不改窗口几何：宠物正跟着鼠标走，扩窗会与之抢位置。
+  if (petPressed) return
+  const bubble = bubbleRef.value
+  if (!bubble || bubble.offsetWidth === 0 || bubble.offsetHeight === 0) {
+    lastBubbleNeed = -1
+    try {
+      await invoke(() => SetPetBubbleVisible(false), 'SetPetBubbleVisible')
+    } catch (e) {
+      logWarn('恢复宠物窗口尺寸失败', { err: String(e) })
+    }
+    return
+  }
+
+  try {
+    await invoke(() => SetPetBubbleVisible(true), 'SetPetBubbleVisible')
+  } catch (e) {
+    logWarn('切换宠物气泡形态失败', { err: String(e) })
+    return
+  }
+  await nextTick()
+  // WebKit 会把「可见但非前台」的窗口也报成 hidden，此时 rAF 会被暂停；
+  // 只等 rAF 会让适配永远挂起。用超时兜底，保证测量一定会发生。
+  await new Promise<void>((resolve) => {
+    const timer = window.setTimeout(resolve, PET_BUBBLE_FIT_WAIT_MS)
+    window.requestAnimationFrame(() => {
+      window.clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  const need = measureBubbleNeed(bubble)
+  if (need <= 0) return
+  if (need === lastBubbleNeed) return
+  try {
+    await invoke(() => SetPetBubbleHeight(need), 'SetPetBubbleHeight')
+    lastBubbleNeed = need
+  } catch (e) {
+    logWarn('调整宠物窗口高度失败', { err: String(e) })
+  }
+}
+
+/** 重建气泡尺寸观察器：切到另一个气泡元素时旧观察器必须断开。 */
+function observeBubble(el: HTMLElement | null): void {
+  bubbleObserver?.disconnect()
+  bubbleObserver = undefined
+  if (!el) return
+  bubbleObserver = new ResizeObserver(() => {
+    void applyBubbleFit()
+  })
+  bubbleObserver.observe(el)
+}
+
+/** 手势结束后补一次适配：拖动期间被主动跳过，松手后要追平当前文案。 */
+function refitBubbleAfterGesture(): void {
+  if (bubbleRef.value) void applyBubbleFit()
+}
+
+// 气泡出现/消失/切换分支：重建观察器并立即适配。
+watch(
+  bubbleRef,
+  (el) => {
+    observeBubble(el)
+    void applyBubbleFit()
+  },
+  { flush: 'post' },
+)
+
+// 缩放在设置页变化时，宠物高度变了但气泡本身未必变——观察器抓不到，主动重测。
+watch(
+  scale,
+  () => {
+    void applyBubbleFit()
+  },
+  { flush: 'post' },
+)
 
 // ---- 画布 / 动画循环的运行时句柄（不是响应式数据）----
 
@@ -400,6 +547,8 @@ function setAnim(next: PetAnimValue, holdMs = 0): void {
  * 这是状态机的唯一收口：待处理非空 → waiting + 气泡；空 → idle 且收起气泡。
  */
 function applyPending(list: PendingFire[]): void {
+  // 待处理数据一变，上一次的失败提示就过期了；真失败会在 catch 里重新设置。
+  bubbleError.value = ''
   pendingCount.value = list.length
   const first = list[0]
   if (!first) {
@@ -499,6 +648,7 @@ useEvent<ReminderFiredPayload>(ReminderEvent.Fired, (payload) => {
   // （那个函数的约定是"失败不改状态"），张冠李戴就会一直挂着。
   // 宁可这一瞬只有标题，也不要把场景名配错——场景名是"这是哪个计划"的唯一线索。
   bubbleScenario.value = ''
+  bubbleError.value = ''
   currentFireID.value = 0
   bubbleTitle.value = payload.title
   bubbleText.value = payload.content
@@ -614,10 +764,12 @@ function onWindowPointerUp(event: MouseEvent): void {
   if (!petPressed) return
   if (performance.now() - pressAt > PET_PRESS_STALE_MS) {
     cancelPetPress()
+    refitBubbleAfterGesture()
     return
   }
   const dragged = petDragged
   cancelPetPress()
+  refitBubbleAfterGesture()
   if (event.button !== 0) return
   if (dragged) return
   const dx = event.screenX - pressOriginX
@@ -658,7 +810,9 @@ function openMainWindow(): void {
  */
 async function actCurrent(kind: 'done' | 'snooze'): Promise<void> {
   const fireID = currentFireID.value
-  if (fireID === 0) return
+  if (fireID === 0 || busy.value) return
+  busy.value = true
+  bubbleError.value = ''
   const before = pendingCount.value
   try {
     if (kind === 'done') {
@@ -674,6 +828,14 @@ async function actCurrent(kind: 'done' | 'snooze'): Promise<void> {
     }
   } catch (e) {
     logWarn('处理提醒失败', { kind, fire_id: fireID, err: String(e) })
+    // 失败先自愈：这条可能已被别处处理，重拉后气泡自然收起。
+    await refreshPending()
+    // 重拉后仍是同一条 → 是真实失败；给用户可见提示，而不是只写日志。
+    if (currentFireID.value === fireID) {
+      bubbleError.value = '操作失败，请再试一次'
+    }
+  } finally {
+    busy.value = false
   }
 }
 
@@ -748,6 +910,9 @@ async function pollSettings(): Promise<void> {
   await syncGrowth()
   await syncPauseState()
   await syncRestModeState()
+  // 4 秒一次的兜底：原生窗口显隐、引擎差异都可能让观察器漏事件。
+  // 有气泡时重报一次；Go 侧对相同尺寸是幂等的，不会反复 resize。
+  if (bubbleRef.value) void applyBubbleFit()
 }
 
 // ---- 生命周期 ----
@@ -797,6 +962,8 @@ onUnmounted(() => {
   window.removeEventListener('mousemove', onWindowPointerMove)
   cancelPetPress()
   stopLoop()
+  bubbleObserver?.disconnect()
+  bubbleObserver = undefined
   sprite = null
   if (holdTimer !== undefined) {
     window.clearTimeout(holdTimer)
@@ -823,30 +990,36 @@ onUnmounted(() => {
   >
     <!-- 休息模式陪做气泡（Countdown）：宠物与 Alert 覆盖层同步的锚点，用户
          不看覆盖层也能余光扫到还剩多久。优先级最高——此刻用户正在【做】这件事。 -->
-    <div v-if="restAccompanying" class="bubble bubble--rest">
+    <div v-if="restAccompanying" ref="bubbleRef" class="bubble bubble--rest">
       <p class="bubble__title">{{ restAccompanyingText }}</p>
     </div>
 
     <!-- 休息模式预警气泡（Warning）：到点前 60 秒的软提示，不发系统通知。 -->
-    <div v-else-if="restWarningVisible" class="bubble bubble--warning">
+    <div v-else-if="restWarningVisible" ref="bubbleRef" class="bubble bubble--warning">
       <p class="bubble__title">{{ restWarningText }}</p>
     </div>
 
     <!-- 暂停气泡：智能免打扰期间显示「我先不打扰」。 -->
-    <div v-else-if="pauseBubbleVisible" class="bubble bubble--pause">
+    <div v-else-if="pauseBubbleVisible" ref="bubbleRef" class="bubble bubble--pause">
       <p class="bubble__title">{{ pauseBubbleText }}</p>
     </div>
 
-    <!-- 气泡：只有待处理提醒时才出现。按钮直接作用于第一条提醒，
-         让用户不必打开主窗口就能处理。 -->
-    <div v-if="bubbleVisible" class="bubble">
+    <!-- 待处理气泡：只有没有更高优先级气泡时才出现。按钮直接作用于第一条提醒，
+         让用户不必打开主窗口就能处理。
+         【必须是这条链的最后一支】陪做 > 预警 > 暂停 > 待处理：同一时刻只显示一个
+         气泡。倒计时期间用户正在「做」，再叠一个完成/推迟只会抢注意力，也会让
+         「从宠物提前完成」绕过休息模式的会话收尾。 -->
+    <div v-else-if="bubbleVisible" ref="bubbleRef" class="bubble">
       <!-- 场景名先行：先回答"这是哪个计划"，再说这条提醒本身 -->
       <p v-if="bubbleScenario" class="bubble__scenario">{{ bubbleScenario }}</p>
       <p class="bubble__title">{{ bubbleHeading }}</p>
       <p v-if="bubbleText" class="bubble__text">{{ bubbleText }}</p>
+      <p v-if="bubbleError" class="bubble__error" role="alert">{{ bubbleError }}</p>
       <div class="bubble__actions">
-        <button class="bubble__btn bubble__btn--primary" @click="onDone">完成</button>
-        <button class="bubble__btn" @click="onSnooze">推迟</button>
+        <button class="bubble__btn bubble__btn--primary" :disabled="busy" @click="onDone">
+          完成
+        </button>
+        <button class="bubble__btn" :disabled="busy" @click="onSnooze">推迟</button>
       </div>
       <span class="bubble__hint" @click="openMainWindow">打开客户端</span>
     </div>
@@ -855,7 +1028,7 @@ onUnmounted(() => {
          用 mousedown 而不是 click 起手势：click 与拖拽共用同一串鼠标事件，
          谁先谁后由 wails 的拖拽逻辑决定，靠它判「点击」是不可靠的。
          拖拽属性走内联样式，兜底模式下会被切成 no-drag（见 artStyleWithDrag）。 -->
-    <div class="pet__art" :style="artStyleWithDrag" @mousedown="onPetPointerDown">
+    <div class="pet__art" ref="petArtRef" :style="artStyleWithDrag" @mousedown="onPetPointerDown">
       <canvas v-if="mode === 'sprite'" ref="canvasRef" class="pet__canvas" />
 
       <!-- 内置形象「小满」：一滴水 + 头顶一株芽，纯程序化绘制（呼吸/眨眼/摇芽全靠 CSS），
@@ -948,6 +1121,9 @@ onUnmounted(() => {
 /* ---- 气泡 ---- */
 .bubble {
   position: relative;
+  /* 固定气泡的自然高度：默认 flex-shrink 会在窗口不够高时把气泡压扁，
+     使 offsetHeight 量不到真实需求。 */
+  flex: none;
   max-width: 100%;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-raised);
@@ -1044,6 +1220,15 @@ onUnmounted(() => {
   font-size: var(--font-size-xs);
 }
 
+/* 失败提示：把「点了没反应」变成可见事实。只在这一条仍在待处理时出现；
+   已被别处处理的场景由 applyPending 清掉并收起气泡。 */
+.bubble__error {
+  margin: var(--space-1) 0 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
 /* ---- 气泡里的操作按钮 ----
    让用户不必打开主窗口就能处理当前这条提醒。 */
 .bubble__actions {
@@ -1066,9 +1251,14 @@ onUnmounted(() => {
   --wails-draggable: no-drag;
 }
 
-.bubble__btn:hover {
+.bubble__btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-1);
+}
+
+.bubble__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .bubble__btn--primary {
@@ -1076,7 +1266,7 @@ onUnmounted(() => {
   color: var(--color-primary);
 }
 
-.bubble__btn--primary:hover {
+.bubble__btn--primary:hover:not(:disabled) {
   background: var(--color-primary-soft);
 }
 

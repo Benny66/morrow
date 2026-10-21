@@ -88,6 +88,13 @@ type App struct {
 	// 落在阈值内。若不停一轮，位置轮询会在展开后立刻把它重新吸附回去，用户看到
 	// 「鼠标划过闪一下就没了」。用原子量而非锁保护：轮询 goroutine 读、绑定调用写。
 	petDockIgnoreUntil atomic.Int64
+	// petBubbleActive / petBubbleBudget 是气泡扩窗的运行期状态（受 petMu 保护）。
+	//
+	// active 表示窗口当前处于「气泡形态」；budget 是气泡自身需要的额外高度
+	// （总高 - 基础高），缩放变化时用它重算总高。两者都不写配置：退出时持久化的是
+	// 基础几何（见 capturePetGeometry）。
+	petBubbleActive bool
+	petBubbleBudget int
 	// trayUp 记录系统托盘是否【真的】起来了，供关窗决策在运行期读取。
 	//
 	// 【为什么是运行期状态而不是编译期常量】托盘在 ServiceStartup 里启动，可能失败
@@ -409,6 +416,12 @@ func (a *App) capturePetGeometry() {
 		return
 	}
 	x, y := w.Position()
+	// 扩窗中退出：持久化的必须是基础几何。否则下次启动会按扩出来的矩形
+	// 还原窗口，宠物凭空下移一段。
+	if a.petBubbleActive {
+		base := a.petCurrentBaseLocked(w)
+		x, y = base.X, base.Y
+	}
 	// 收起态下窗口在屏幕边缘外，直接存会得到一对屏幕外坐标；下次启动时
 	// petRestorePosition 会判定"这块位置没有屏幕"，把宠物丢回主屏右下角——
 	// 等于用户这次拖动白费。故收起时存展开位置。
@@ -916,17 +929,41 @@ func (a *App) tickRestMode() {
 	cur := a.restMode.Current()
 	if cur.FireID != 0 && a.svc != nil {
 		if err := a.svc.CompleteReminder(cur.FireID); err != nil {
-			slog.Warn("休息模式自动记完成失败", "fire_id", cur.FireID, "err", err)
-			// 状态保持 Done 但不 Reset；用户可以从 UI 里手动重试。
-			return
+			if !restCompletionSettled(err) {
+				slog.Warn("休息模式自动记完成失败", "fire_id", cur.FireID, "err", err)
+				// 状态保持 Done 但不 Reset；下一轮 tick 重试。
+				return
+			}
+			// 已被宠物、首页或系统通知提前处理：会话已经结算，照常 Reset。
+			slog.Info("休息模式自动完成：该提醒已结算，视为完成", "fire_id", cur.FireID)
 		}
 	}
 	a.restMode.Reset()
 	a.emitRestModeState()
+	// 自动完成同样改变了待处理数据；不广播 changed 会让宠物一直挂着这条
+	// 已被写成 done 的提醒——用户再点完成只会得到「该提醒已处理」。
+	a.emitReminderChanged(reminder.ReasonCheckIn)
 	// Done→Idle 的过渡在 1 秒内跑完，前端可能永远看不到 Done 状态；
-	// 单独广播一个 completed 事件让 UI 播一次「做完了」的瞬时反馈（US-11）。
+	// 单独广播 completed 让 UI 播一次「做完了」的瞬时反馈（US-11）。
 	if a.app != nil {
 		a.app.Event.Emit("restmode:completed", cur.FireID)
+	}
+}
+
+// restCompletionSettled 判断休息模式自动完成的错误是否表示「会话已结算」。
+//
+// validation（该提醒已处理）与 not_found（记录不存在）说明这条已被宠物、首页或
+// 系统通知提前处理——会话已经没有未结算的事实，可以照常 Reset。内部错误必须
+// 保持 Done 等待重试，否则 CheckIn 会静默丢失。
+func restCompletionSettled(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch apperr.Wrap(err).Code {
+	case apperr.CodeValidation, apperr.CodeNotFound:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1463,28 +1500,95 @@ func (a *App) GetPetSettings() (config.PetSettings, error) {
 //
 // 返回一句面向用户的提示（前端直接显示），失败经 apperr 上抛。
 func (a *App) SetPetSettings(in config.PetSettings) (string, error) {
+	a.petMu.Lock()
+	defer a.petMu.Unlock()
+
+	w := a.petWindow()
+	wasBubble := a.petBubbleActive
+	budget := a.petBubbleBudget
+	// 扩窗中改缩放：先用【旧】缩放把窗口还原到基础几何。SavePetSettings 之后
+	// cfg 里的 scale 就是新值，再反算会把旧矩形按新尺寸解释，锚点会漂。
+	if w != nil && wasBubble {
+		a.restorePetBubbleLocked(w)
+	}
 	if err := a.cfg.SavePetSettings(in); err != nil {
 		return "", apperr.Wrap(err)
 	}
 
-	a.petMu.Lock()
-	defer a.petMu.Unlock()
-	if w := a.petWindow(); w != nil {
+	if w != nil {
 		if in.PetVisible {
 			// 同 setPetVisible：先还原到展开位置，否则 Show 出来的是屏幕外那块。
 			a.restorePetFromDockLocked(w)
 			w.Show()
+			// 以底边 + 横向中心为锚换尺寸：宠物在屏幕上的落点不因缩放而跳。
+			old := petWindowRect(w)
+			width, height := petWindowSize(a.cfg.PetScaleValue())
+			x := old.X + (old.W-width)/2
+			y := old.Y + old.H - height
+			w.SetSize(width, height)
+			w.SetPosition(x, y)
+			if wasBubble {
+				// 保持气泡形态：用旧预算按新基础高度重算，前端随后会再校准。
+				a.expandPetBubbleLocked(w, height+budget)
+			}
 		} else {
 			w.Hide()
-		}
-		// 尺寸只在可见时调整：隐藏态下改尺寸在部分平台会顺带把窗口顶到前台。
-		if in.PetVisible {
-			width, height := petWindowSize(a.cfg.PetScaleValue())
-			w.SetSize(width, height)
 		}
 	}
 	slog.Info("宠物设置已保存", "visible", in.PetVisible, "scale", a.cfg.PetScaleValue())
 	return "已保存", nil
+}
+
+// SetPetBubbleVisible 切换宠物窗口的气泡形态。
+//
+// true：按气泡需要加宽到目标宽度，高度维持基础值（随后前端会调
+// SetPetBubbleHeight 按实测高度加高）。false：恢复基础尺寸与位置。
+// 扩窗是运行期状态，不写配置；贴边收起时忽略（气泡此时本来就不显示）。
+func (a *App) SetPetBubbleVisible(visible bool) error {
+	a.petMu.Lock()
+	defer a.petMu.Unlock()
+
+	w := a.petWindow()
+	if w == nil {
+		return apperr.NotFound("宠物窗口尚未创建")
+	}
+	if visible {
+		// 用户把宠物关掉时不做扩窗。不用 w.IsVisible()：macOS 的 occlusionState
+		// 会把「可见但非前台」的宠物窗口报成不可见（实测启动阶段恒为 false），
+		// 用它会把适配整个拦掉。配置里的 PetVisible 是用户的真实意图。
+		if !a.cfg.PetVisible {
+			return nil
+		}
+		if a.petDockCollapsed() {
+			return nil
+		}
+		a.expandPetBubbleLocked(w, 0)
+		return nil
+	}
+	a.restorePetBubbleLocked(w)
+	return nil
+}
+
+// SetPetBubbleHeight 把宠物窗口高度调整到气泡所需的总高度（含宠物与内边距）。
+//
+// 只在气泡形态下生效；total 小于基础高度时按基础高度处理。
+func (a *App) SetPetBubbleHeight(total int) error {
+	a.petMu.Lock()
+	defer a.petMu.Unlock()
+
+	w := a.petWindow()
+	if w == nil {
+		return apperr.NotFound("宠物窗口尚未创建")
+	}
+	if !a.petBubbleActive {
+		return nil
+	}
+	// 与 SetPetBubbleVisible 同一道门槛：用户把宠物关掉后不再改隐藏窗口的尺寸。
+	if !a.cfg.PetVisible {
+		return nil
+	}
+	a.expandPetBubbleLocked(w, total)
+	return nil
 }
 
 // ExpandPet 把贴边收起的宠物展开回原位置（宠物窗口里鼠标划过窄边时调用）。

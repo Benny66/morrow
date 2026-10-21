@@ -1555,6 +1555,80 @@ func TestWindowCloseHidesToTray(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 护栏 19b：休息模式自动完成必须同时广播两个事件
+//
+// 【本次报障的根因】tickRestMode 自动把 fire 写成 done，却只广播了
+// restmode:completed，没有广播 reminder:changed。宠物窗口只在 fired/changed 时
+// 刷新待处理，于是一直挂着一条早已完成的提醒；用户点击「完成」得到「该提醒已处理」，
+// 前端只写日志、UI 不动——看起来就是按钮死了。
+//
+// 这类缺失没有任何症状：状态机照常 Reset，日志里也只有一条正常完成记录。
+// 故必须把「自动完成 → 两个广播」编译成会红的检查。
+//
+// 铁律：解析到 0 个目标必须报错（护栏感知自己瞎了）。
+// ---------------------------------------------------------------------------
+
+// TestRestAutoCompleteBroadcastsBothEvents 断言 tickRestMode 同时广播
+// reminder:changed 与 restmode:completed。
+func TestRestAutoCompleteBroadcastsBothEvents(t *testing.T) {
+	files, err := parseDir(projectRoot())
+	if err != nil {
+		t.Fatalf("解析项目根目录失败: %v", err)
+	}
+	app, ok := files["app.go"]
+	if !ok {
+		t.Fatal("护栏找不到 app.go——写法可能已变更，请同步更新护栏解析规则")
+	}
+
+	fd := findMethodDecl(app, "tickRestMode")
+	if fd == nil {
+		t.Fatal("app.go 中找不到 tickRestMode——方法被改名/移动，护栏已瞎，" +
+			"请同步更新护栏解析规则（解析不到时静默放行等于没有护栏）")
+	}
+
+	if !containsCallNamed(fd.Body, "emitReminderChanged") {
+		t.Error("tickRestMode 没有广播 reminder:changed：\n" +
+			"  自动完成后宠物/首页/Alert 都不知道待处理已变化，宠物会一直挂着一条\n" +
+			"  已被写成 done 的提醒；用户再点完成只会得到「该提醒已处理」，且 UI 不动。\n" +
+			"  必须在 Reset 的同一路径里调用 emitReminderChanged。")
+	}
+	if !containsEmitWithLiteral(fd.Body, "restmode:completed") {
+		t.Error("tickRestMode 没有广播 restmode:completed：\n" +
+			"  Alert.vue 的「做完了」瞬时反馈依赖这条事件；缺了它不会报错，" +
+			"只会让休息结束变成一个无声的消失。")
+	}
+}
+
+// containsEmitWithLiteral 判断子树里是否出现 `xxx.Emit("want", ...)`。
+func containsEmitWithLiteral(n ast.Node, want string) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Emit" || len(call.Args) == 0 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		s, uerr := strconv.Unquote(lit.Value)
+		if uerr == nil && s == want {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// ---------------------------------------------------------------------------
 // 护栏 20：托盘缺失时，关闭必须真正退出（兜底链路）
 //
 // 【为什么需要】D13 指出：托盘在 ServiceStartup 里起，可能失败（失败只记日志、不阻断
