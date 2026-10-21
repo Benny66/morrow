@@ -70,10 +70,20 @@ bash scripts/gen.sh asset  >/dev/null
 bash scripts/gen.sh widget >/dev/null
 
 # 断言：import 幂等——每个 import 只应出现一次
+#
+# 【模块名必须从 go.mod 取，不能写死 verifygen】本脚本两端都要能跑：
+#   - 母版：模块名是占位符，步骤 1 会把它替换成 verifygen；
+#   - 已实例化仓库（本仓是 morrow）：没有占位符，替换是 no-op，模块名仍是 morrow。
+# 写死 verifygen 会让实例化仓库永远数到 0，把「生成器正常」误报成「注入非幂等」。
+MODULE_PATH="$(awk '/^module[[:space:]]/{print $2; exit}' go.mod)"
+if [ -z "$MODULE_PATH" ]; then
+  echo "错误：无法从 go.mod 读取 module 名——verify-gen 的导入断言无从对账" >&2
+  exit 1
+fi
 for imp in 'internal/model' 'internal/page'; do
-  n=$(grep -c "verifygen/$imp\"" app.go || true)
+  n=$(grep -c "\"${MODULE_PATH}/${imp}\"" app.go || true)
   if [ "$n" -ne 1 ]; then
-    echo "错误：import $imp 在 app.go 出现 $n 次（期望 1）——gen.sh 的 import 注入非幂等" >&2
+    echo "错误：import ${MODULE_PATH}/${imp} 在 app.go 出现 $n 次（期望 1）——gen.sh 的 import 注入非幂等" >&2
     exit 1
   fi
 done
