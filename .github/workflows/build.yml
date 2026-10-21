@@ -57,19 +57,20 @@ jobs:
 
   # 编译矩阵（只编译，不启动 GUI）。
   #
+  # 当前【只跑 macOS】。Windows 腿暂时移出 CI：产物仍可在本地打包
+  # （scripts/package.sh / release.yml 的 package job），只是不再作为每次 push 的
+  # 验证承诺。恢复时把 'windows-latest' 加回 os 列表即可，其余步骤无需改动。
+  #
   # 刻意【不含 Linux】：Linux 产物要求系统装了哪个 webkit 版本（wails 默认找
   # webkit2gtk-4.0，而 Ubuntu 24.04+/Debian 13+ 只有 4.1，需 -tags webkit2_41），
   # 这类环境耦合让「编译通过」取决于 runner 镜像的包，维护成本高于收益。
   # Linux 仍可本地打包（见 README 的打包说明），但不在 CI 的验证承诺内。
-  #
-  # Linux 的 Go 层覆盖仍由上面的 check job（ubuntu-latest）承担：
-  # test / vet / lint / 护栏 / 生成器端到端都在那里跑。
   build:
     needs: check
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
