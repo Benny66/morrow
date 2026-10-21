@@ -3,7 +3,6 @@
 package pause
 
 import (
-	"syscall"
 	"unsafe"
 )
 
