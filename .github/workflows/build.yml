@@ -57,9 +57,10 @@ jobs:
 
   # 编译矩阵（只编译，不启动 GUI）。
   #
-  # 当前【只跑 macOS】。Windows 腿暂时移出 CI：产物仍可在本地打包
-  # （scripts/package.sh / release.yml 的 package job），只是不再作为每次 push 的
-  # 验证承诺。恢复时把 'windows-latest' 加回 os 列表即可，其余步骤无需改动。
+  # macOS + Windows 双平台编译；Windows 腿的步骤必须显式 shell: bash——
+  # runner 默认 PowerShell 会把 `set -euo pipefail` 当成 Set-Variable 参数。
+  # 打包入口直接调 scripts/build.sh（make 在 Windows runner 上不保证存在），
+  # 与本地 make build 共用同一个构建实现。
   #
   # 刻意【不含 Linux】：Linux 产物要求系统装了哪个 webkit 版本（wails 默认找
   # webkit2gtk-4.0，而 Ubuntu 24.04+/Debian 13+ 只有 4.1，需 -tags webkit2_41），
@@ -70,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +89,7 @@ jobs:
       # 方式与本地不一致，而两边都「成功」。go.mod 是 wails 版本的唯一真相。
       # 注意可执行名是 wails3（v2 的 CLI 叫 wails，两者不通用）。
       - name: Install wails3 CLI (version from go.mod)
+        shell: bash
         run: |
           set -euo pipefail
           V="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
@@ -96,10 +98,12 @@ jobs:
           wails3 version
 
       - name: Install frontend deps
+        shell: bash
         run: cd frontend && npm install
 
       - name: Build
-        run: make build
+        shell: bash
+        run: bash scripts/build.sh
 
       # 生成器端到端验证：连生 2 个模块 → 生成 bindings → 编译 → gofmt → 护栏。
       # 这是本仓唯一的端到端检查，历史上抓到过 3 个真实 bug（缺 import / 注入非幂等 /
