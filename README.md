@@ -1,28 +1,75 @@
-# Morrow
+<div align="center">
 
-本地优先的桌面健康提醒应用。提醒由一只叫「小满」的桌面宠物承载：一滴水，头顶一株芽，芽随今日完成率生长。
+<img src="build/icon/appicon.svg" width="88" height="88" alt="Morrow app icon">
 
-## 功能
+<h1>Morrow</h1>
 
-### 提醒
+<p><strong>A local-first desktop wellness app, carried by a small desktop pet.</strong><br>
+本地优先的桌面健康提醒应用。提醒由一只叫「小满」的桌面宠物承载：一滴水，头顶一株芽，芽随今日完成率生长。</p>
 
-- **周期性提醒**：每天在指定时段内按间隔重复，例如「09:00–18:00 每小时喝水」；也支持每天只响一次的每日单点。
-- **一次性提醒**：指定绝对日期与时刻，只触发一次。独立于场景启停，错过不跨日补发，但会在首页保留可见条目。
-- **自然停顿顺延**：周期性、每日单点与推迟到点的提醒，到点时若你正在键鼠输入，最多顺延 60 秒；停手后投递。到上限仍在输入时改为安静投递（通知 + 宠物 + 待处理，不弹全屏、不进休息模式）。一次性提醒保持绝对时刻，不顺延。可在设置中关闭或改为 30 秒。
-- **六种类型**：喝水 / 站立 / 走动 / 如厕 / 护眼放松 / 其他，决定图标、进度量词与休息引导。
+<p>
+  <a href="https://github.com/Benny66/morrow/actions/workflows/build.yml"><img src="https://github.com/Benny66/morrow/actions/workflows/build.yml/badge.svg?branch=main" alt="Build"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-2f6f4e?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/Wails-v3-DF2B2B?style=flat-square" alt="Wails v3">
+  <img src="https://img.shields.io/badge/Vue-3-42b883?style=flat-square" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square" alt="Go 1.25+">
+</p>
 
-### 智能免打扰
+<p>
+  <a href="#why-morrow">为什么 Morrow</a> ·
+  <a href="#features">功能</a> ·
+  <a href="#screenshots">界面</a> ·
+  <a href="#quick-start">快速开始</a> ·
+  <a href="#architecture">架构</a> ·
+  <a href="#privacy">隐私</a> ·
+  <a href="#docs">文档</a>
+</p>
+
+</div>
+
+<p align="center">
+  <img src="docs/images/dashboard.png" width="920" alt="Morrow dashboard with an active scenario, a pending reminder and today's progress">
+</p>
+<p align="center"><sub><b>仪表盘 / Dashboard</b> · 当前计划、待处理提醒、今日进度与下一次触发，一屏读完。</sub></p>
+
+<a id="why-morrow"></a>
+## 为什么 Morrow / Why Morrow
+
+- **本地优先 / Local-first**：SQLite 本地落盘，无账号、无云同步；提醒、打卡与统计全部留在本机。AI 只在主动使用相关功能时调用你配置的端点。
+- **宠物承载 / Carried by a pet**：不是又一个计时器。小满在桌面上陪你完成每一次喝水、起身与远眺；芽随今日完成率生长。
+- **零配置起步 / Zero-config start**：内置 5 个场景模板，干净安装后三步就能得到一套可编辑、可启用的计划。AI 是可选的自定义入口，不是前置条件。
+- **日常保健边界 / General wellness, not medical advice**：只覆盖喝水、起身、走动、用眼放松、如厕等办公日常；不做疾病诊断、用药或医疗建议。
+
+<a id="features"></a>
+## 功能 / Features
+
+### 提醒与计划 / Reminders & Plans
+
+- **周期性提醒 / Recurring reminders**：每天在指定时段内按间隔重复，例如「09:00–18:00 每小时喝水」。
+- **每日单点 / Daily single-point**：每天同一时刻只响一次（`interval_min = 0`），不会因「完成」而永久停用。
+- **一次性提醒 / One-off reminders**：指定绝对日期与时刻，只触发一次。独立于场景启停，错过不跨日补发，但在首页保留可见条目。
+- **自然停顿顺延 / Natural pause deferral**：周期性、每日单点与推迟到点的提醒，到点时若你正在键鼠输入，最多顺延 60 秒；停手后投递。到上限仍在输入时改为安静投递（通知 + 宠物 + 待处理，不弹全屏、不进休息模式）。一次性提醒保持绝对时刻，不顺延。可在设置中关闭或改为 30 秒。
+- **六种类型 / Six kinds**：喝水 / 站立 / 走动 / 如厕 / 护眼放松 / 其他，决定图标、进度量词与休息引导。
+
+### 场景模板与首次引导 / Templates & Onboarding
+
+- **五个内置模板 / Five built-in templates**：久坐办公、会议密集日、备考冲刺、居家办公、护眼优先。每个模板都覆盖五类关注目标（喝水 / 站立 / 走动 / 用眼放松 / 如厕），靠间隔与时段体现差异。
+- **确定性内容 / Deterministic content**：模板是只读定义，不调用 AI、不需要 Key、离线可用。选用即复制成普通场景，副本可编辑、可启用、可删除；模板更新不回溯已有副本。
+- **三步首次引导 / Three-step onboarding**：干净安装后依次选择工作时段、最想解决的两件事、模板。应用按工作时段裁切提醒窗口、按目标保留提醒，完成后自动启用。已有场景的升级用户不会看到引导。
+- **AI 仍可选 / AI remains optional**：场景页保留「AI 生成计划」；模板负责零配置起步，AI 负责个性化。
+
+### 智能免打扰 / Smart Pause
 
 到点时若用户不该被打扰，自动顺延、不补发。六路信号可逐项开关：
 
-| 信号 | 触发条件 | 默认 |
+| 信号 / Signal | 触发条件 / Trigger | 默认 / Default |
 |---|---|---|
-| 空闲 | 连续 3 / 5 / 10 分钟无键鼠输入 | 开，5 分钟 |
-| 锁屏 | 屏幕锁定或系统休眠 | 开 |
-| 会议 | Zoom / Teams / Webex / 腾讯会议 / 飞书 / 钉钉 / FaceTime 在前台 | 开 |
-| 全屏 | 前台窗口铺满当前显示器 | 关 |
-| 专注模式 | macOS 系统专注开启（12+） | 关 |
-| 日历忙闲 | macOS 日历当前处于忙碌时段 | 关 |
+| 空闲 / Idle | 连续 3 / 5 / 10 分钟无键鼠输入 | 开，5 分钟 |
+| 锁屏 / Lock | 屏幕锁定或系统休眠 | 开 |
+| 会议 / Meeting | Zoom / Teams / Webex / 腾讯会议 / 飞书 / 钉钉 / FaceTime 在前台 | 开 |
+| 全屏 / Fullscreen | 前台窗口铺满当前显示器 | 关 |
+| 专注模式 / Focus | macOS 系统专注开启（12+） | 关 |
+| 日历忙闲 / Calendar | macOS 日历当前处于忙碌时段 | 关 |
 
 暂停期间：
 
@@ -31,7 +78,7 @@
 
 感知只用本机活跃度与前台应用身份：不采集屏幕内容、不读日历事件标题/参与人/备注/地点、不上传。
 
-### 演示模式
+### 演示模式 / Presentation Mode
 
 菜单栏或全局快捷键可进入/退出演示模式：
 
@@ -41,63 +88,84 @@
 - 退出后不补弹演示前的待处理；新到点提醒照常；
 - 不读取屏幕内容与窗口标题，不检测摄像头或麦克风。
 
-### 休息模式
+### 休息模式 / Rest Mode
 
 站立 / 走动 / 护眼三类提醒在到点前 60 秒给出预警（宠物气泡 + 菜单栏），到点进入倒计时覆盖层，展示与类型匹配的内置引导动作：
 
-| 类型 | 时长 | 引导方向 |
+| 类型 / Kind | 时长 / Duration | 引导方向 / Cue |
 |---|---|---|
-| 护眼放松 | 60 秒 | 远眺 + 呼吸 |
-| 站立 | 120 秒 | 肩颈拉伸 |
-| 走动 | 180 秒 | 起身走动 |
+| 护眼放松 / Rest | 60 秒 | 远眺 + 呼吸 |
+| 站立 / Stand | 120 秒 | 肩颈拉伸 |
+| 走动 / Move | 180 秒 | 起身走动 |
 
 倒计时结束自动记「完成」；提前结束可选「算完成」或「跳过」。喝水 / 如厕 / 其他保持简单打卡。引导内容内置，离线可用，不调用 AI。
 
-### 场景与 AI
+### 场景与 AI / Scenarios & AI
 
-- **场景**：一段自然语言描述的处境（如「备孕办公日」），是周期性计划的组织单位；同一时刻至多启用一个。
-- **AI 计划**：由场景生成整套周期性提醒，逐条可编辑。
-- **快速添加**：在首页输入文字或附加图片/文件，AI 解析为一次性或周期性草稿；先预览、逐条确认，再落库。
+- **场景 / Scenario**：一段自然语言描述的处境（如「备孕办公日」），是周期性计划的组织单位；同一时刻至多启用一个。
+- **AI 计划 / AI plan**：由场景生成整套周期性提醒，逐条可编辑。
+- **快速添加 / Quick add**：在首页输入文字或附加图片/文件，AI 解析为一次性或周期性草稿；先预览、逐条确认，再落库。
 
-### 场景模板与首次引导
-
-- **场景模板**：5 个内置模板（久坐办公 / 会议密集日 / 备考冲刺 / 居家办公 / 护眼优先），每个都包含喝水、站立、走动、护眼与如厕五类提醒，只是节奏与时段不同。模板是确定性内容，不调用 AI、不需要 Key、离线可用；选用后复制成普通场景，可逐条编辑。
-- **首次引导**：干净安装后三步完成设置：工作时段 → 最想解决的两件事 → 选模板。应用会按工作时段裁切提醒窗口、按目标保留提醒，完成后自动启用；全程不需要 AI Key。已有场景的用户不会看到引导。
-
-### 打卡与进度
+### 打卡与进度 / Check-ins & Progress
 
 - 完成 / 跳过 / 推迟（默认 5 分钟，可调 1–120）。
 - 首页：待处理、已错过、今日进度、下一次触发倒计时。
 - 计划页：每条提醒的今日进度与连续达标天数。
 
-### 桌面与系统集成
+### 桌面与系统集成 / Desktop & System Integration
 
-- **桌面宠物**：透明置顶小窗常驻桌面。待处理时进入等待、清空后庆祝、休息时陪做；芽按今日完成率分五档生长；支持缩放、隐藏与导入素材包。
-- **菜单栏**：显示今日完成/目标、下一条提醒时间、待处理数量，以及暂停或休息原因；提供「打开主窗」「查看待处理」「进入/退出演示模式」「退出」。
-- **强提醒**：到点在全屏遮罩上展示待处理卡片，覆盖所有显示器；主屏显示完整操作，副屏显示简化卡片。桌宠与遮罩默认排除出屏幕捕获。
-- **其他**：静默时段（默认 22:00–08:00）、系统通知、开机自启、唤起主窗与演示模式全局快捷键、明暗主题、数据库导出与恢复。
+- **桌面宠物 / Desktop pet**：透明置顶小窗常驻桌面。待处理时进入等待、清空后庆祝、休息时陪做；芽按今日完成率分五档生长；支持缩放、隐藏与导入素材包。
+- **菜单栏 / Menu bar**：显示今日完成/目标、下一条提醒时间、待处理数量，以及暂停或休息原因；提供「打开主窗」「查看待处理」「进入/退出演示模式」「退出」。
+- **强提醒 / Strong alert**：到点在全屏遮罩上展示待处理卡片，覆盖所有显示器；主屏显示完整操作，副屏显示简化卡片。桌宠与遮罩默认排除出屏幕捕获。
+- **其他 / Other**：静默时段（默认 22:00–08:00）、系统通知、开机自启、唤起主窗与演示模式全局快捷键、明暗主题、数据库导出与恢复。
 
-### 本地优先
+### 本地优先 / Local-first
 
 SQLite 本地落盘，无账号体系。只有主动使用 AI 功能时才访问你配置的端点；其余能力全部离线可用。
 
-## 技术栈
+<a id="screenshots"></a>
+## 界面 / Screenshots
 
-- 桌面壳：Wails v3（Go + 系统 WebView）
-- 前端：Vue 3 + TypeScript + Vite + Element Plus + Pinia
-- 数据：gorm + SQLite（纯 Go 驱动，交叉编译无 CGO 依赖）
-- AI：OpenAI 兼容的最小客户端，可配置 Base URL / 模型 / Key
+### 场景模板库 / Template library
 
-## 环境要求
+<p align="center">
+  <img src="docs/images/template-library.png" width="92%" alt="Morrow scenario template library with five built-in templates">
+</p>
+<p align="center"><sub><b>场景模板库</b> · 5 个内置模板，每个包含 5 类提醒；一键复制为可编辑场景，默认停用。</sub></p>
 
-| 依赖 | 版本 | 说明 |
+模板是确定性内容：不需要 AI Key，也不联网。选中一个模板即可得到一套完整的提醒副本，之后在计划页逐条修改；「AI 生成计划」仍然保留，作为更个性化的自定义入口。
+
+### 首次引导 / Onboarding
+
+<p align="center">
+  <img src="docs/images/onboarding.png" width="72%" alt="Morrow onboarding step 3: choose a template and preview the filtered reminders">
+</p>
+<p align="center"><sub><b>首次引导</b> · 工作时段 + 两个关注目标 + 模板，实时预览保留的提醒与下一次触发。</sub></p>
+
+引导只出现在干净安装且没有场景时。工作时段只用于裁切本次生成的提醒窗口；关注目标只用于保留所选类型的提醒；完成或跳过都会写入完成标记，之后不再出现。
+
+### 可编辑的计划 / Editable plan
+
+<p align="center">
+  <img src="docs/images/plan.png" width="88%" alt="Morrow plan page with editable reminders">
+</p>
+<p align="center"><sub><b>计划页</b> · 每条提醒的间隔、时段与每日目标都可以逐条调整。</sub></p>
+
+AI 只负责生成一次，之后完全本地可控：模板副本与 AI 计划都落在同一张计划页里，可编辑、停用、删除，也可以随时手动新增一条。
+
+<a id="quick-start"></a>
+## 快速开始 / Quick Start
+
+### 环境要求 / Prerequisites
+
+| 依赖 / Dependency | 版本 / Version | 说明 / Notes |
 |---|---|---|
 | Go | ≥ 1.25 | `go version` 确认 |
 | Node | ≥ 20 | `node --version` 确认 |
 | Wails CLI | v3，与 `go.mod` 对齐（当前 `v3.0.0-beta.23`） | `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23` |
 | 平台依赖 | — | Windows 需 WebView2；Linux 需 GTK4 + WebKitGTK 6.0 |
 
-## 快速开始
+### 运行 / Run
 
 ```bash
 make dev       # 开发态（含前端热更新）
@@ -110,9 +178,9 @@ make lint      # gofmt + 护栏 + go vet + ESLint + vue-tsc
 `cd frontend && npm install && npm run build`（或直接 `make dev`）；`make test` / `make lint`
 会检测缺失并提示。
 
-## 常用命令
+### 常用命令 / Commands
 
-| 命令 | 作用 |
+| 命令 / Command | 作用 / Purpose |
 |---|---|
 | `make dev` | 开发态，前端热更新 |
 | `make build` | 编译当前平台产物 |
@@ -123,59 +191,73 @@ make lint      # gofmt + 护栏 + go vet + ESLint + vue-tsc
 | `make install` | 构建并安装到本机 `/Applications`（macOS） |
 | `make icon` | 从 `build/icon/appicon.svg` 重新生成三平台图标 |
 
-## 目录结构
-
-完整导航见 [`docs/map.md`](docs/map.md)。核心目录：
-
-```
-main.go                 # 入口：窗口、托盘、单实例、日志、数据库
-app.go                  # 前端可调用的绑定方法（业务一律经 service）
-alert_window.go         # 强提醒窗口（多显示器）
-pet_window.go           # 桌面宠物窗口（透明 + 置顶 + 位置还原）
-pet_dock.go             # 宠物贴边与交互
-reminder_runtime.go     # 提醒调度运行时接线
-internal/reminder/      # 调度引擎（时间计算 / 触发 / 暂停 / 预警 / 补发策略）
-internal/pause/         # 智能免打扰：六路信号与优先级聚合
-internal/restmode/      # 休息模式状态机与内置引导内容
-internal/scenariotemplate/ # 场景模板唯一真相与个性化纯函数
-internal/ai/            # OpenAI 兼容客户端与容错 JSON 解析
-internal/service/       # 业务服务（提醒、场景、打卡、成长、导入导出）
-internal/model/         # 数据模型 + AllModels() 注册表
-internal/database/      # gorm + SQLite 连接与迁移
-internal/{config,logging,appdir,appinfo,apperr,event,page,tray,guard,...}
-frontend/src/views/     # Home / Plan / Scenarios / Welcome / Pet / Alert / Settings
-frontend/src/lib/       # 事件、错误码、分页、提醒与暂停领域的前端契约镜像
-```
-
-## 数据与配置
+### 数据与配置 / Data & Config
 
 应用数据目录（数据库、配置、日志同处）：
 
-- macOS：`~/Library/Application Support/Morrow/`
-- Windows：`%AppData%\Morrow\`
-- Linux：`~/.config/Morrow/`
+| 平台 / Platform | 路径 / Path |
+|---|---|
+| macOS | `~/Library/Application Support/Morrow/` |
+| Windows | `%AppData%\Morrow\` |
+| Linux | `~/.config/Morrow/` |
 
 目录内主要是 `Morrow.db`、`config.json`、`app.log`。设置页会显示实际路径，并提供数据库导出与恢复。
 
 > AI 的 API Key 以明文保存在 `config.json`。不要把数据目录提交进仓库或随手分享；
 > 需要备份时优先使用设置页的数据库导出。
 
-## 隐私
+<a id="architecture"></a>
+## 架构 / Architecture
 
-- **不采集内容**：不截图、不录屏、不读窗口标题；日历只读「此刻是否忙碌」这一个布尔值。捕获排除只阻止窗口进入共享/录屏，不读取任何屏幕内容。
-- **不使用摄像头**：判断「人是否在电脑前」只依赖系统空闲时长与前台应用身份。
-- **演示模式不猜内容**：只依据前台应用身份、全屏几何与你的主动操作；不分析屏幕、不读窗口标题。
-- **不上传**：所有数据留在本机；AI 只是可选的一次性调用，只发送你主动输入的场景描述或文本。
-- **可关闭、可降级**：六路免打扰信号逐项可关；权限被拒绝或平台不支持时对应能力明确降级，其余功能照常工作。
+Morrow 是一个 Wails v3 桌面应用：Go 负责窗口、托盘、提醒调度与本地存储，Vue 3 负责渲染，二者通过绑定方法与事件协议通信。提醒计划、模板目录与个性化规则都在 Go 侧收敛为单一真相，前端只消费结果。
 
-## 构建与发布
+<p align="center">
+  <img src="docs/images/architecture.svg" width="760" alt="Morrow architecture: Wails desktop shell, Vue renderer, Go services and SQLite">
+</p>
+
+### 技术栈 / Tech Stack
+
+- **桌面壳 / Shell**：Wails v3（Go + 系统 WebView）
+- **前端 / Frontend**：Vue 3 + TypeScript + Vite + Element Plus + Pinia
+- **数据 / Data**：gorm + SQLite（纯 Go 驱动，交叉编译无 CGO 依赖）
+- **AI**：OpenAI 兼容的最小客户端，可配置 Base URL / 模型 / Key
+
+核心目录：
+
+```text
+main.go                     # 入口：窗口、托盘、单实例、日志、数据库
+app.go                      # 前端可调用的绑定方法（业务一律经 service）
+internal/reminder/          # 调度引擎（时间计算 / 触发 / 暂停 / 预警 / 补发策略）
+internal/pause/             # 智能免打扰：六路信号与优先级聚合
+internal/restmode/          # 休息模式状态机与内置引导内容
+internal/scenariotemplate/  # 场景模板目录与个性化纯函数
+internal/ai/                # OpenAI 兼容客户端与容错 JSON 解析
+internal/service/           # 业务服务（提醒、场景、打卡、成长、导入导出）
+internal/model/             # 数据模型 + AllModels() 注册表
+internal/database/          # gorm + SQLite 连接与迁移
+frontend/src/views/         # Home / Plan / Scenarios / Welcome / Pet / Alert / Settings
+frontend/src/lib/           # 事件、错误码、分页、提醒与模板的前端契约/展示工具
+```
+
+完整导航见 [`docs/map.md`](docs/map.md)。
+
+<a id="privacy"></a>
+## 隐私 / Privacy
+
+- **不采集内容 / No content capture**：不截图、不录屏、不读窗口标题；日历只读「此刻是否忙碌」这一个布尔值。捕获排除只阻止窗口进入共享/录屏，不读取任何屏幕内容。
+- **不使用摄像头 / No camera**：判断「人是否在电脑前」只依赖系统空闲时长与前台应用身份。
+- **演示模式不猜内容 / No content guessing**：只依据前台应用身份、全屏几何与你的主动操作；不分析屏幕、不读窗口标题。
+- **不上传 / No upload**：所有数据留在本机；AI 只是可选的一次性调用，只发送你主动输入的场景描述或文本。场景模板完全本地生成，不发起任何网络请求。
+- **可关闭、可降级 / Off by default where it matters**：六路免打扰信号逐项可关；权限被拒绝或平台不支持时对应能力明确降级，其余功能照常工作。
+
+## 构建与发布 / Build & Release
 
 - 版本号单一真相在 `build/config.yml` 的 `info.version`；`scripts/build.sh` 同时把它渲染进产物与 `-ldflags`，`scripts/set-version.sh` 是写入入口。
 - `make package` 产出 macOS `.dmg`（含 Finder 美化布局）或 Windows NSIS 安装器；无 `makensis` 时降级为裸 exe。
 - CI：`.github/workflows/build.yml` 跑静态检查与 macOS/Windows 编译；`.github/workflows/release.yml` 由 tag 触发自动发布。
 - 版本号必须是数字点分格式（如 `1.0.0`），Windows 的 NSIS 不接受 `v` 前缀或哈希。
 
-### macOS 本地签名
+### macOS 本地签名 / Local signing
 
 默认构建使用 ad-hoc 签名，其「指定要求」只有代码哈希；每次重新构建哈希都会变，
 macOS 会把新二进制当成另一个应用，**屏幕录制 / 专注 / 日历授权会随之失效**。
@@ -188,7 +270,7 @@ bash scripts/dev-signing-cert.sh
 
 之后 `make install` 会自动用它签名，重建不再丢授权。
 
-## 平台支持与已知限制
+## 平台支持与已知限制 / Platform Support
 
 - 主要交付平台是 macOS / Windows。Linux 可编译，但 WebKitGTK 版本耦合，未纳入 CI。
 - 智能免打扰在 macOS 上完整实现；Windows 上专注与日历两路信号静默缺席，不报错。
@@ -199,9 +281,10 @@ bash scripts/dev-signing-cert.sh
 - 托盘启动失败时，关闭窗口会真正退出，避免留下看不见的无窗口进程。
 - 窗口只记忆尺寸与最大化，不持久化位置。
 
-## 文档
+<a id="docs"></a>
+## 文档 / Documentation
 
-| 文档 | 内容 |
+| 文档 / Document | 内容 / Content |
 |---|---|
 | [`CONTEXT.md`](CONTEXT.md) | 领域术语表 |
 | [`docs/map.md`](docs/map.md) | 代码导航地图 |
@@ -209,3 +292,5 @@ bash scripts/dev-signing-cert.sh
 | [`docs/pet-character.md`](docs/pet-character.md) | 小满的形象、状态与生长规则 |
 | [`docs/specs/`](docs/specs/) | 规格说明书 |
 | [`AGENTS.md`](AGENTS.md) | 跨端架构铁律 |
+
+提交前请阅读 `AGENTS.md`，并确保 `make test` 与 `make lint` 通过。
