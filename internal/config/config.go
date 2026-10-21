@@ -84,6 +84,12 @@ type Config struct {
 	// Theme 界面主题：dark / light。空串（""）表示"未设置"，语义为"跟随系统"。
 	Theme string `json:"theme"`
 
+	// OnboardingCompleted 首次引导是否已完成（完成或跳过都置 true）。
+	// 旧版 config.json 缺该键时为零值 false；是否真正展示由
+	// App.ShouldShowOnboarding 结合「有没有场景」判断：已有场景的升级用户
+	// 会被自动补上标记，不会被迫过一遍引导。
+	OnboardingCompleted bool `json:"onboarding_completed"`
+
 	// WindowWidth / WindowHeight 上次关闭时的窗口尺寸。
 	// 0 表示"未记录"（首次启动），此时取默认值。
 	WindowWidth  int `json:"window_width"`

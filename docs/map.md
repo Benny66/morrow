@@ -24,7 +24,7 @@
 |---|---|
 | `internal/model/` | 数据模型 + `AllModels()` 注册表（模型唯一真相） |
 | `internal/database/` | gorm + SQLite 连接、模型迁移执行（含 reminders 旧表重建迁移） |
-| `internal/service/` | 业务服务层（绑定方法经此访问数据库；`reminder.go` 提醒 CRUD、`quickadd.go` AI 快速添加、`pet.go` 宠物素材包） |
+| `internal/service/` | 业务服务层（绑定方法经此访问数据库；`reminder.go` 提醒 CRUD、`quickadd.go` AI 快速添加、`pet.go` 宠物素材包、`scenario_template.go` 场景模板实例化） |
 | `internal/appdir/` | **单一真相**：应用数据目录（数据库/配置/日志/崩溃日志同目录） |
 | `internal/appinfo/` | 版本/平台/关键路径（版本注入目标见 `scripts/package.sh`） |
 | `internal/config/` | `config.json` 读写（主题 + 窗口几何 + 提醒行为 + 桌面宠物） |
@@ -37,6 +37,7 @@
 | `internal/page/` | **契约**：分页协议（`Request` / `Result[T]`） |
 | `internal/event/` | **契约**：事件协议（`<domain>:<action>` + payload） |
 | `internal/reminder/` | 本地提醒调度引擎（`schedule.go` 纯时间计算 + `engine.go` 调度循环 + 一次性提醒全局扫描 + `contract.go` 接口与事件载荷） |
+| `internal/scenariotemplate/` | 场景模板唯一真相：5 个内置模板、目录、按目标过滤/按工作时段裁切/目标夹取的纯函数 |
 | `internal/ai/` | OpenAI 兼容的最小客户端（计划生成 + `quickadd.go` 一次性/周期草稿解析；`parse.go` 容错 JSON） |
 | `internal/guard/` | 架构护栏（以 go test 形式运行，含契约护栏与**前端镜像一致性**护栏） |
 
@@ -44,8 +45,8 @@
 
 | 路径 | 内容 |
 |---|---|
-| `main.ts` | 前端入口 |
-| `App.vue` | 根组件 |
+| `main.ts` | 前端入口（挂载前解析首次引导门禁） |
+| `App.vue` | 根组件（完整应用 / 首次引导布局 / 裸页面三态） |
 | `components/` | 通用组件（TitleBar 等） |
 | `layouts/` | 布局（AppShell：标题栏 + 侧栏 + 内容区） |
 | `stores/` | Pinia 状态 |
@@ -55,13 +56,14 @@
 | `lib/event.ts` | **契约**：事件协议前端镜像（事件名 / payload / `onEvent` 订阅） |
 | `lib/page.ts` | **契约**：分页协议前端镜像（类型 / 页大小常量） |
 | `lib/reminder.ts` | **契约**：提醒领域前端镜像（事件名 / 载荷 / kind 枚举与展示元数据） |
+| `lib/template.ts` | 场景模板展示文案（提醒日程 / 类型标签 / 下一次计划提醒格式化） |
 | `lib/attachment.ts` | 附件展示常量与文件名/类型判断（真正限额在 Go 侧 `ai_input.go`） |
 | `lib/pet.ts` | 宠物渲染的单一真相（图集布局 / 动画行序 / 帧率；与素材约定对齐，无 Go 侧镜像） |
 | `lib/app.ts` | **契约**：应用级事件（`onSecondInstance`）与启动参数 |
 | `lib/log.ts` | **契约**：前端日志出口 + 全局错误兜底（唯一正确出口） |
 | `composables/` | 组合式函数（`useEvent` 自动解绑、`usePagedList` 列表加载） |
 | `styles/` | 设计令牌与主题（tokens / theme / element 覆盖） |
-| `views/` | 页面（`make gen` 生成的模块页面落在此处；`Home.vue` 含快速添加/即将到来，`Plan.vue` 计划维护，`Scenarios.vue` 场景与 AI 计划，`Pet.vue` 宠物裸页面） |
+| `views/` | 页面（`make gen` 生成的模块页面落在此处；`Home.vue` 含快速添加/即将到来，`Plan.vue` 计划维护，`Scenarios.vue` 场景与 AI 计划/模板库，`Welcome.vue` 首次引导，`Pet.vue` 宠物裸页面） |
 
 ## 模板与工具
 
@@ -98,6 +100,7 @@
 | `docs/specs/2026-10-20-baseline-parity.md` | 本轮规格：智能免打扰 + 场景化休息模式 + 桌面集成（P0/P1） |
 | `docs/specs/2026-10-21-uninterrupted-slice.md` | 「不被打断」切片规格：演示模式 + 自然停顿顺延 |
 | `docs/specs/2026-10-21-pet-bubble-expansion-and-refresh.md` | 宠物气泡扩窗 + 打卡刷新 + 休息结算规格 |
+| `docs/specs/2026-10-21-scenario-templates-and-onboarding.md` | 场景模板 + 首次引导（三步）规格 |
 | `docs/adr/` | 不可逆决策记录（如一次性提醒独立于场景） |
 | `CONTEXT.md` | 领域术语表（一次性 / 每日单点 / 快速添加等） |
 | `docs/代码规范.md` | 命名与管道契约的编码约定 |

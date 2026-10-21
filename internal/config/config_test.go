@@ -308,3 +308,49 @@ func TestShortcutPresentationRoundTrip(t *testing.T) {
 		t.Errorf("ShortcutPresentation = %q，期望 CmdOrCtrl+Shift+P", reloaded.ShortcutPresentation)
 	}
 }
+
+// TestOnboardingCompletedDefaultsFalseAndPersists 首次引导标记默认 false，写完可读回。
+func TestOnboardingCompletedDefaultsFalseAndPersists(t *testing.T) {
+	isolateHome(t)
+
+	cfg, err := Load("onboardingtest")
+	if err != nil {
+		t.Fatalf("Load 失败: %v", err)
+	}
+	if cfg.OnboardingCompleted {
+		t.Fatal("首次引导标记默认应为 false")
+	}
+
+	cfg.OnboardingCompleted = true
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save 失败: %v", err)
+	}
+	reloaded, err := Load("onboardingtest")
+	if err != nil {
+		t.Fatalf("重新 Load 失败: %v", err)
+	}
+	if !reloaded.OnboardingCompleted {
+		t.Fatal("首次引导标记未持久化")
+	}
+}
+
+// TestLoadOldConfigWithoutOnboardingField 旧配置缺 onboarding_completed 时按 false 处理。
+func TestLoadOldConfigWithoutOnboardingField(t *testing.T) {
+	isolateHome(t)
+
+	path, err := appdir.File("oldcfgtest", "config.json")
+	if err != nil {
+		t.Fatalf("appdir.File 失败: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"light"}`), 0o644); err != nil {
+		t.Fatalf("写入旧配置失败: %v", err)
+	}
+
+	cfg, err := Load("oldcfgtest")
+	if err != nil {
+		t.Fatalf("Load 失败: %v", err)
+	}
+	if cfg.OnboardingCompleted {
+		t.Fatal("旧配置缺 onboarding_completed 时应为 false")
+	}
+}

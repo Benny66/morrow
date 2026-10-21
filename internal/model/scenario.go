@@ -1,7 +1,8 @@
 package model
 
 // Scenario 是一个「使用场景」：用户用自然语言描述自己的处境（例如「我在备孕，
-// 不能久坐」），AI 据此一次性产出整套提醒计划。
+// 不能久坐」），AI 据此一次性产出整套提醒计划；也可以从内置场景模板实例化出
+// 一套确定性计划（见 internal/scenariotemplate）。
 //
 // 【为什么同时只能启用一个场景】通知是打断性的稀缺资源。多场景同时启用会让同一个人
 // 在一小时里收到「喝水 + 起身 + 走动 + 如厕」四路通知，用户的第一反应是把通知关掉，
@@ -18,12 +19,13 @@ type Scenario struct {
 	// 存全量原文：用户回头想微调计划时需要看到自己当初怎么说的。
 	Description string `gorm:"type:text" json:"description"`
 
-	// Summary 是 AI 对这套计划的一句话总结（生成时写入），供场景页展示。
+	// Summary 是 AI 或场景模板对这套计划的一句话总结（生成/实例化时写入），供场景页展示。
 	Summary string `gorm:"size:500" json:"summary"`
 
 	// Enabled 是否启用。同一时刻至多一行为 true（见类型注释）。
 	Enabled bool `gorm:"not null;default:false;index" json:"enabled"`
 
-	// GeneratedAt 最近一次用 AI 生成计划的时间（Unix 秒）。0 表示从未生成过。
+	// GeneratedAt 最近一次生成计划的时间（Unix 秒）：AI 生成或模板实例化。
+	// 0 表示从未生成过。
 	GeneratedAt int64 `gorm:"not null;default:0" json:"generated_at"`
 }

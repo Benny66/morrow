@@ -6,8 +6,9 @@ import App from './App.vue'
 import router from './router'
 import { useAppStore } from './stores/app'
 import { createVueErrorHandler, installGlobalErrorHandler } from './lib/error-report'
-import { ipcStats } from './lib/invoke'
-import { logInfo } from './lib/log'
+import { invoke, ipcStats } from './lib/invoke'
+import { logError, logInfo } from './lib/log'
+import { ShouldShowOnboarding } from '../bindings/morrow/app.js'
 import './styles/tokens.css'
 import './styles/theme.css'
 import './styles/element.css'
@@ -38,6 +39,24 @@ const themeMs = performance.now() - themeStart
 // 不等的话首帧按 '/' 渲染——一个 240×360 的透明小窗里会先闪出一整屏深色 AppShell，
 // 再切到宠物页。主窗看不出差别，宠物窗口上却是一块明显的黑方块。
 await router.isReady()
+
+// 首次引导门禁：必须在挂载前决定，否则首页会先闪一帧再跳走。
+// 宠物 / 强提醒窗口（meta.bare）跳过——它们与主界面的引导状态无关，
+// 若在这里重定向，宠物窗口会被换成一张向导页。
+if (router.currentRoute.value.meta.bare !== true) {
+  try {
+    const shouldShow = await invoke(() => ShouldShowOnboarding(), 'ShouldShowOnboarding')
+    const onWelcome = router.currentRoute.value.path === '/welcome'
+    if (shouldShow && !onWelcome) {
+      await router.replace('/welcome')
+    } else if (!shouldShow && onWelcome) {
+      await router.replace('/')
+    }
+  } catch (err) {
+    // 绑定失败（纯 vite dev / Go 侧异常）不阻塞启动；代价只是这次不显示引导。
+    logError('首次引导状态检查失败', err)
+  }
+}
 
 const mountStart = performance.now()
 app.mount('#app')

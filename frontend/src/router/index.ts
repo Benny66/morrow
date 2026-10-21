@@ -18,6 +18,13 @@ declare module 'vue-router' {
      * 宠物窗口需要一片纯透明的空白画布）。见 App.vue 的说明。
      */
     bare?: boolean
+    /**
+     * 是否为「首次引导」布局：保留标题栏、隐藏侧栏。
+     *
+     * 首次引导要专注完成三步设置，但主窗口是无边框的——没有标题栏就无法
+     * 拖动/关闭，故不能复用 bare。
+     */
+    wizard?: boolean
   }
 }
 
@@ -46,6 +53,14 @@ const routes: RouteRecordRaw[] = [
     name: 'settings',
     component: () => import('../views/Settings.vue'),
     meta: { title: '设置' },
+  },
+  {
+    // 首次引导专用路由：保留标题栏、隐藏侧栏（见 RouteMeta.wizard）。
+    // 启动守卫在 main.ts 里决定是否跳到 /welcome。
+    path: '/welcome',
+    name: 'welcome',
+    component: () => import('../views/Welcome.vue'),
+    meta: { title: '首次设置', wizard: true },
   },
   {
     // 宠物窗口专用路由：宠物窗口创建时 URL 为 /#/pet（见 pet_window.go）。

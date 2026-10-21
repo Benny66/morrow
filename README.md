@@ -59,6 +59,11 @@
 - **AI 计划**：由场景生成整套周期性提醒，逐条可编辑。
 - **快速添加**：在首页输入文字或附加图片/文件，AI 解析为一次性或周期性草稿；先预览、逐条确认，再落库。
 
+### 场景模板与首次引导
+
+- **场景模板**：5 个内置模板（久坐办公 / 会议密集日 / 备考冲刺 / 居家办公 / 护眼优先），每个都包含喝水、站立、走动、护眼与如厕五类提醒，只是节奏与时段不同。模板是确定性内容，不调用 AI、不需要 Key、离线可用；选用后复制成普通场景，可逐条编辑。
+- **首次引导**：干净安装后三步完成设置：工作时段 → 最想解决的两件事 → 选模板。应用会按工作时段裁切提醒窗口、按目标保留提醒，完成后自动启用；全程不需要 AI Key。已有场景的用户不会看到引导。
+
 ### 打卡与进度
 
 - 完成 / 跳过 / 推迟（默认 5 分钟，可调 1–120）。
@@ -132,12 +137,13 @@ reminder_runtime.go     # 提醒调度运行时接线
 internal/reminder/      # 调度引擎（时间计算 / 触发 / 暂停 / 预警 / 补发策略）
 internal/pause/         # 智能免打扰：六路信号与优先级聚合
 internal/restmode/      # 休息模式状态机与内置引导内容
+internal/scenariotemplate/ # 场景模板唯一真相与个性化纯函数
 internal/ai/            # OpenAI 兼容客户端与容错 JSON 解析
 internal/service/       # 业务服务（提醒、场景、打卡、成长、导入导出）
 internal/model/         # 数据模型 + AllModels() 注册表
 internal/database/      # gorm + SQLite 连接与迁移
 internal/{config,logging,appdir,appinfo,apperr,event,page,tray,guard,...}
-frontend/src/views/     # Home / Plan / Scenarios / Pet / Alert / Settings
+frontend/src/views/     # Home / Plan / Scenarios / Welcome / Pet / Alert / Settings
 frontend/src/lib/       # 事件、错误码、分页、提醒与暂停领域的前端契约镜像
 ```
 

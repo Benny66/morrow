@@ -28,6 +28,7 @@ import (
 	"morrow/internal/reminder"
 	"morrow/internal/restmode"
 	"morrow/internal/reveal"
+	"morrow/internal/scenariotemplate"
 	"morrow/internal/service"
 	"morrow/internal/systemprefs"
 	"morrow/internal/tray"
@@ -497,6 +498,39 @@ func (a *App) SetTheme(theme string) error {
 	a.cfg.Theme = theme
 	if err := a.cfg.Save(); err != nil {
 		// 落盘失败是系统错误，经 Wrap 归一化为 internal（原始错误保留在 Detail）。
+		return apperr.Wrap(err)
+	}
+	return nil
+}
+
+// ShouldShowOnboarding 判断启动时是否进入首次引导。
+//
+// 【为什么在这里自动补标记】升级用户没有 onboarding_completed 键，但已经有
+// 场景；若只按标记判断，他们会被关进一个本不需要的向导。这里以「有场景」
+// 作为既成事实，补写标记后放行。落盘失败只记日志：不能因为配置文件不可写
+// 就把已有数据的用户挡在引导里。
+func (a *App) ShouldShowOnboarding() (bool, error) {
+	if a.cfg.OnboardingCompleted {
+		return false, nil
+	}
+	scenarios, err := a.svc.ListScenarios()
+	if err != nil {
+		return false, apperr.Wrap(err)
+	}
+	if len(scenarios) > 0 {
+		a.cfg.OnboardingCompleted = true
+		if saveErr := a.cfg.Save(); saveErr != nil {
+			slog.Warn("自动补齐首次引导完成标记失败", "error", saveErr)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+// CompleteOnboarding 记录首次引导已完成；完成与跳过走同一条路径。
+func (a *App) CompleteOnboarding() error {
+	a.cfg.OnboardingCompleted = true
+	if err := a.cfg.Save(); err != nil {
 		return apperr.Wrap(err)
 	}
 	return nil
@@ -1335,6 +1369,33 @@ func (a *App) DeleteScenario(id uint) error {
 // 这是 AI 在运行期唯一出现的地方：生成一次，之后全靠本地调度。
 func (a *App) GenerateScenarioPlan(id uint) (*service.GeneratePlanResult, error) {
 	result, err := a.svc.GeneratePlan(a.currentAISettings(), id)
+	if err != nil {
+		return nil, apperr.Wrap(err)
+	}
+	a.emitReminderChanged(reminder.ReasonPlanChanged)
+	return result, nil
+}
+
+// ListScenarioTemplates 返回内置场景模板目录（确定性内容，不调用 AI）。
+func (a *App) ListScenarioTemplates() scenariotemplate.Catalog {
+	return a.svc.ListScenarioTemplates()
+}
+
+// PreviewScenarioTemplate 返回按工作时段与关注目标个性化后的提醒预览；不写库。
+func (a *App) PreviewScenarioTemplate(key, workStart, workEnd string, goals []string) (*scenariotemplate.Preview, error) {
+	preview, err := a.svc.PreviewScenarioTemplate(key, workStart, workEnd, goals)
+	if err != nil {
+		return nil, apperr.Wrap(err)
+	}
+	return preview, nil
+}
+
+// ApplyScenarioTemplate 把模板复制成普通场景及提醒项；成功后广播数据变更。
+//
+// enable=true 只由首次引导使用：它沿用场景单选语义，会停用其他场景；
+// 场景页路径传 false，避免静默替换用户当前启用的计划。
+func (a *App) ApplyScenarioTemplate(key, workStart, workEnd string, goals []string, enable bool) (*service.ApplyTemplateResult, error) {
+	result, err := a.svc.ApplyScenarioTemplate(key, workStart, workEnd, goals, enable)
 	if err != nil {
 		return nil, apperr.Wrap(err)
 	}

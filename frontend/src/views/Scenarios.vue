@@ -4,21 +4,26 @@ import { useRoute } from 'vue-router'
 import Skeleton from '../components/Skeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import {
+  ApplyScenarioTemplate,
   Confirm,
   CreateScenario,
   DeleteScenario,
   GenerateScenarioPlan,
+  ListScenarioTemplates,
   ListScenarios,
   SetScenarioEnabled,
 } from '../../bindings/morrow/app.js'
 import { invoke, type AppError } from '../lib/invoke'
-import { ReminderEvent } from '../lib/reminder'
+import { ReminderEvent, kindMeta } from '../lib/reminder'
+import { reminderScheduleText, templateKindLabels } from '../lib/template'
 import { useEvent } from '../composables/useEvent'
 import { logInfo } from '../lib/log'
 
-// 场景页：用一段自然语言描述处境 → 让 AI 一次性产出整套提醒计划。
-// 这是 AI 在运行期唯一出现的地方（见 internal/ai 的包注释）。
+// 场景页：从内置模板一键起步，或用一段自然语言描述处境 → 让 AI 一次性产出整套提醒。
+// AI 仍是运行期唯一的生成路径；模板是确定性内容，不调用 AI。
 type ScenarioRow = NonNullable<Awaited<ReturnType<typeof ListScenarios>>>[number]
+type TemplateCatalog = Awaited<ReturnType<typeof ListScenarioTemplates>>
+type TemplateRow = NonNullable<TemplateCatalog['templates']>[number]
 
 const route = useRoute()
 const scenarios = ref<ScenarioRow[]>([])
@@ -28,6 +33,11 @@ const hint = ref('')
 // 正在生成计划的场景 ID（0 表示空闲）：同一条卡片上的按钮据此显示 loading。
 const generatingID = ref(0)
 const saving = ref(false)
+// 模板库状态：展开的模板 key、正在应用的模板 key、加载中。
+const templates = ref<TemplateRow[]>([])
+const templatesLoading = ref(false)
+const expandedTemplate = ref('')
+const applyingTemplateKey = ref('')
 
 const form = ref({ name: '', description: '' })
 
@@ -45,6 +55,58 @@ async function load(): Promise<void> {
     error.value = e as AppError
   } finally {
     loading.value = false
+  }
+}
+
+/** 显式刷新场景与模板：清掉旧错误，让失败后能原样重试。 */
+async function refresh(): Promise<void> {
+  error.value = null
+  hint.value = ''
+  await Promise.all([load(), loadTemplates()])
+}
+
+/** 加载内置模板目录。模板来自 Go 侧唯一真相，前端不写死内容。 */
+async function loadTemplates(): Promise<void> {
+  templatesLoading.value = true
+  try {
+    const catalog = await invoke(() => ListScenarioTemplates(), 'ListScenarioTemplates')
+    templates.value = catalog?.templates ?? []
+  } catch (e) {
+    error.value = e as AppError
+  } finally {
+    templatesLoading.value = false
+  }
+}
+
+/** 展开/收起某个模板的完整提醒清单（一次只展开一个）。 */
+function toggleTemplatePreview(key: string): void {
+  expandedTemplate.value = expandedTemplate.value === key ? '' : key
+}
+
+/**
+ * 用模板原样创建一套副本。
+ *
+ * 这里固定 enable=false：场景页可能已有启用中的计划，自动启用会静默替换它；
+ * 只有首次引导（此刻必然没有场景）才自动启用。
+ */
+async function applyTemplate(tpl: TemplateRow): Promise<void> {
+  applyingTemplateKey.value = tpl.key
+  error.value = null
+  hint.value = ''
+  try {
+    const result = await invoke(
+      () => ApplyScenarioTemplate(tpl.key, '', '', [], false),
+      'ApplyScenarioTemplate',
+    )
+    const name = result?.scenario?.name ?? tpl.name
+    const count = result?.reminders?.length ?? 0
+    hint.value = `已创建「${name}」（${count} 条提醒，默认停用）。点下方场景卡片的「启用」开始提醒。`
+    logInfo('模板副本已创建', { key: tpl.key, scenario_id: result?.scenario?.id, count })
+    await load()
+  } catch (e) {
+    error.value = e as AppError
+  } finally {
+    applyingTemplateKey.value = ''
   }
 }
 
@@ -153,7 +215,7 @@ onMounted(() => {
   if (typeof description === 'string' && description.trim() !== '') {
     form.value.description = description
   }
-  void load()
+  void refresh()
 })
 </script>
 
@@ -163,14 +225,62 @@ onMounted(() => {
       <div>
         <h1 class="page__title">场景</h1>
         <p class="page__desc">
-          用一句话描述你的处境（例如「我在备孕，不能久坐，每小时喝一杯水」），AI 会生成整套提醒。
+          先选一个模板，或用一句话描述你的处境（例如「我在备孕，不能久坐，每小时喝一杯水」），AI 会生成整套提醒。
         </p>
       </div>
-      <el-button size="small" :loading="loading" @click="load()">刷新</el-button>
+      <el-button size="small" :loading="loading || templatesLoading" @click="refresh()">刷新</el-button>
     </header>
 
     <p v-if="error" class="page__error">[{{ error.code }}] {{ error.message }}</p>
     <p v-if="hint" class="page__hint">{{ hint }}</p>
+
+    <section class="templates">
+      <div class="templates__head">
+        <div>
+          <h2 class="templates__title">从模板开始</h2>
+          <p class="templates__desc">
+            不需要 AI Key，选一个最接近你一天的模板；生成后可在计划页逐条修改。
+          </p>
+        </div>
+        <span v-if="templatesLoading" class="templates__loading">加载模板…</span>
+      </div>
+
+      <div v-if="templates.length" class="template-grid">
+        <article v-for="tpl in templates" :key="tpl.key" class="template-card">
+          <div class="template-card__head">
+            <h3 class="template-card__name">{{ tpl.name }}</h3>
+            <span class="template-card__count">{{ tpl.reminders?.length ?? 0 }} 条提醒</span>
+          </div>
+          <p class="template-card__summary">{{ tpl.summary }}</p>
+          <p class="template-card__kinds">{{ templateKindLabels(tpl) }}</p>
+          <div class="template-card__actions">
+            <el-button size="small" text @click="toggleTemplatePreview(tpl.key)">
+              {{ expandedTemplate === tpl.key ? '收起提醒' : '查看提醒' }}
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="applyingTemplateKey === tpl.key"
+              :disabled="applyingTemplateKey !== '' && applyingTemplateKey !== tpl.key"
+              @click="applyTemplate(tpl)"
+            >
+              使用模板
+            </el-button>
+          </div>
+          <ul v-if="expandedTemplate === tpl.key" class="template-card__preview">
+            <li
+              v-for="(item, index) in tpl.reminders ?? []"
+              :key="index"
+              class="template-card__reminder"
+            >
+              <span class="template-card__kind">{{ kindMeta(item.kind).label }}</span>
+              <span class="template-card__title">{{ item.title }}</span>
+              <span class="template-card__schedule">{{ reminderScheduleText(item) }}</span>
+            </li>
+          </ul>
+        </article>
+      </div>
+    </section>
 
     <el-card class="create" shadow="never">
       <h2 class="create__title">新建场景</h2>
@@ -203,7 +313,7 @@ onMounted(() => {
 
     <Skeleton v-if="loading && !hasScenarios" :rows="3" />
 
-    <EmptyState v-else-if="!hasScenarios" description="还没有场景。填上面的表单，描述一次你的一天。" />
+    <EmptyState v-else-if="!hasScenarios" description="还没有场景。可以从上方模板开始，或填下面的表单描述一次你的一天。" />
 
     <ul v-else class="list">
       <li v-for="row in scenarios" :key="row.id" class="scenario">
@@ -273,6 +383,125 @@ onMounted(() => {
   margin: 0 0 var(--space-3);
   color: var(--color-success);
   font-size: var(--font-size-sm);
+}
+
+.templates {
+  margin-bottom: var(--space-5);
+}
+
+.templates__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.templates__title {
+  font-size: var(--font-size-md);
+  margin: 0 0 var(--space-1);
+  color: var(--text-1);
+}
+
+.templates__desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.templates__loading {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--font-size-xs);
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+.template-card {
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.template-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.template-card__name {
+  font-size: var(--font-size-lg);
+  margin: 0;
+}
+
+.template-card__count {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+}
+
+.template-card__summary {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.template-card__kinds {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--font-size-xs);
+}
+
+.template-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.template-card__preview {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) 0 0;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.template-card__reminder {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--text-2);
+}
+
+.template-card__kind {
+  color: var(--color-primary);
+}
+
+.template-card__title {
+  font-weight: 500;
+}
+
+.template-card__schedule {
+  grid-column: 2;
+  color: var(--text-3);
+  font-family: var(--font-mono);
 }
 
 .create {
