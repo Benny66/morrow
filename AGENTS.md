@@ -19,6 +19,9 @@
    - 模型清单唯一真相在 `internal/model/model.go` 的 `AllModels()`。
    - 依赖清单唯一真相在 `deps.yaml`。
    - 应用数据目录（数据库/配置/日志/崩溃日志）唯一真相在 `internal/appdir`。
+   - 休息预警的措辞唯一真相在 `internal/restmode` 的措辞表，气泡与菜单栏都取
+     `Snapshot().CueText`；越界副本由 `internal/guard/warning_wording_test.go` 拦住
+     （见 `docs/adr/0012-rest-warning-survival.md`）。
    - 管道契约常量（错误码 / 事件动作 / 页大小上下界）的前端镜像由
      `internal/guard/parity_test.go` 双向校验：改了 Go 不同步前端即红。
      **镜像只许复制常量与类型，不许复制逻辑**——一件规则两个实现比一个常量两份更糟。

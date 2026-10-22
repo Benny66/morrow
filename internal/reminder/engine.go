@@ -253,9 +253,16 @@ func (e *Engine) Tick() {
 	}
 	// 到点前 60 秒的休息预警：stand/move/rest 类若下一 fire 落在窗口内，
 	// Machine 进入 Warning；Pet.vue 与菜单栏据此显示预警文案。
-	// 【暂停期跳过预警】用户此刻在开会/锁屏，一条「1 分钟后休息」气泡没意义。
-	if !paused && e.restMode != nil {
-		if err := e.tickWarnings(now); err != nil {
+	// 【暂停时只撤销不扫描】用户此刻在会议/锁屏/挂机，一条「1 分钟后休息」的气泡
+	// 既没意义也撤不掉（暂停期间根本不跑 tickWarnings）——见 ADR 0012 与 CONTEXT
+	// 的「休息预警」：暂停本身就是一条撤销理由，不等那次触发落定。
+	if e.restMode != nil {
+		if paused {
+			// 撤销原因（会议/锁屏/空闲）已由上面「智能免打扰生效」那行日志带出，这里不重复。
+			if cur := e.restMode.Current(); e.restMode.CancelWarning() {
+				slog.Info("休息预警撤销：进入智能免打扰", "reminder_id", cur.ReminderID)
+			}
+		} else if err := e.tickWarnings(now); err != nil {
 			slog.Warn("休息模式预警扫描失败", "err", err)
 		}
 	}
@@ -278,8 +285,10 @@ func (e *Engine) Tick() {
 // 【为什么每次 tick 都全量扫】提醒数量是十几条级别，扫一次的开销比一次 SQL
 // 还低；做增量缓存反而会增加「提醒项被删/停用后缓存过期」的复杂度。
 //
-// 【预警发出后提醒项被删怎么办】下一轮扫不到那条了；这里显式 CancelWarning：
-// 预警的语义是「马上要 fire 了」，fire 不存在就该撤销，不能让宠物挂着假信号。
+// 【预警什么时候撤销】判据是"它预告的那次触发是否仍待投递"，见 warningStillPending：
+// 提醒项被停用/删除/切走场景，或那次触发已被占用（安静投递、静默时段、暂停期静默、
+// 真实休息后跳过），都该撤销——预警的语义是「马上要 fire 了」，
+// fire 不存在或已经不会再变成休息模式，挂着就是假信号（ADR 0012）。
 func (e *Engine) tickWarnings(now time.Time) error {
 	// Countdown / Done / Skipped / EarlyCompleted 状态下不覆盖当前会话。
 	// Idle 与 Warning 可以刷新。
@@ -325,14 +334,22 @@ func (e *Engine) tickWarnings(now time.Time) error {
 		}
 	}
 	if best == nil {
-		// 【到点瞬间的空窗】若当前正在预警、且预警的目标时刻已到（但本轮 tickGrid
-		// 还没跑），保留预警状态不撤销——tickGrid 会在同一 tick 里 dispatch 并
-		// 走 Enter 把状态推进到 Countdown。撤销会留下 0–20 秒的 Idle 空窗。
+		// 【保活分支】扫不到候选有两种完全不同的原因：预警预告的那次触发还没落定
+		// （正在顺延，会连续跨几轮 tick），或者它已经落定/根本不会再发生。
+		// 前者必须保留——顺延期间撤销气泡，用户会在毫无预告下被覆盖层打断；
+		// 后者必须撤销，这就是实机挂住 23 分钟的那一类。
+		// 【判据是「那次触发仍待投递」，不是「计划时刻过没过」】见 ADR 0012 与
+		// warningStillPending：时间判据两头不讨好——宽限短了盖不住顺延，宽限长了
+		// 安静投递/静默时段/真实休息后跳过全都撤不掉（实测见票的实现记录）。
 		if st == restmode.StateWarning {
 			cur := e.restMode.Current()
-			if cur.PlannedFireAt > 0 && cur.PlannedFireAt <= nowUnix {
+			if e.warningStillPending(reminders, cur) {
+				slog.Info("休息预警保留：预告的触发仍待投递",
+					"reminder_id", cur.ReminderID, "planned_fire_at", cur.PlannedFireAt)
 				return nil
 			}
+			slog.Info("休息预警撤销：预告的触发已落定或不再存在",
+				"reminder_id", cur.ReminderID, "planned_fire_at", cur.PlannedFireAt)
 		}
 		e.restMode.CancelWarning()
 		return nil
@@ -353,6 +370,31 @@ func (e *Engine) tickWarnings(now time.Time) error {
 		PlannedFireAt: best.at,
 	})
 	return nil
+}
+
+// warningStillPending 判断一条进行中的预警所预告的那次触发是否仍待投递。
+//
+// 两条同时成立才算"仍待投递"：
+//  1. 那条提醒项仍在当前启用场景里、且仍是同一 kind 的休息类提醒——被停用 / 删除 /
+//     切走场景之后那次触发永远不会再落定，继续挂着就是等一个已经不存在的 fire；
+//  2. 触发点尚未被占用（`claimed` 内存备忘）——安静投递、静默时段、暂停期静默、
+//     真实休息后跳过都已经在 tickGrid 里把它占用掉了。
+//
+// 【为什么不查数据库】唯一索引才是真相，但这里要回答的是"这一轮 tickGrid 有没有处理过它"，
+// 而引擎每处理一个点都先写内存备忘；跨自然日备忘清空时，那种极端情形的撤销只会晚
+// 一个 tick（见 spec §7），不值得为它每轮多一次 SELECT。
+func (e *Engine) warningStillPending(reminders []model.Reminder, cur restmode.RestRequest) bool {
+	if cur.PlannedFireAt <= 0 || cur.ReminderID == 0 {
+		return false
+	}
+	stillActive := false
+	for _, item := range reminders {
+		if item.ID == cur.ReminderID && item.Kind == cur.Kind {
+			stillActive = true
+			break
+		}
+	}
+	return stillActive && !e.isClaimed(cur.ReminderID, cur.PlannedFireAt)
 }
 
 // tickOneOffs 处理全局一次性提醒：到点且未产生 fire 的提醒只处理一次。

@@ -28,6 +28,9 @@ const (
 	StateIdle State = "idle"
 	// StateWarning 到点前 60 秒的预警（宠物气泡 + 菜单栏文案）。
 	// 【与 Countdown 分开】预警只【告知】，不打断用户；到点才真的进入 Cover。
+	// 【存活多久由引擎判据决定】判据是「它预告的那次触发是否仍待投递」，
+	// 见 internal/reminder/engine.go 的 warningStillPending 与 ADR 0012；
+	// 本包只负责"处于预警时该说什么"，不决定它能挂多久。
 	StateWarning State = "warning"
 	// StateCountdown 倒计时进行中。
 	StateCountdown State = "countdown"
@@ -45,6 +48,9 @@ const (
 //
 // 【为什么做成导出的常量】引擎扫预警、UI 渲染「N 秒后开始」文案都依赖这个数字；
 // 一处真相避免"引擎按 60 秒触发、UI 写死 30 秒"的漂移。
+// 【与措辞分档的关系】它只是预警的**起点**；预警能挂多久由引擎的存活判据决定
+// （internal/reminder/engine.go 的 warningStillPending + ADR 0012），
+// 本包只负责"处于预警时该说什么"。三档下界见 warningCueHalf / warningCueSoon。
 const WarningLeadTime = 60 * time.Second
 
 // RestRequest 是一次进入休息模式的请求。
@@ -54,7 +60,9 @@ const WarningLeadTime = 60 * time.Second
 // 提醒事件已经在服务端记了 FireFired，用户下次开窗口看到的还是完整的休息流程。
 type RestRequest struct {
 	// FireID 关联的 reminder_fires 记录 ID；完成/跳过都写回这一条。
-	// 【Countdown 阶段是真实 fireID；Warning 阶段还没落 fire，这里存 reminderID 兜底】。
+	// 【Countdown 阶段是真实 fireID；Warning 阶段还没落 fire，这里存的是 reminderID 兜底】——
+	// 所以预警阶段的存活判据不要读它，用 ReminderID + PlannedFireAt
+	// （见 internal/reminder/engine.go 的 warningStillPending）。
 	FireID uint
 	// ReminderID 提醒项 ID（写入 CheckIn 需要）。
 	ReminderID uint
@@ -290,30 +298,17 @@ func (m *Machine) Snapshot() Snapshot {
 	snap.ScenarioID = m.cur.ScenarioID
 	snap.Kind = m.cur.Kind
 	snap.Title = m.cur.Title
+	// 【先算剩余再算文案】预警的措辞按剩余时间分档，顺序写反就会用零值剩余去选文案
+	// ——那是"到点却说 1 分钟后"的另一半来源，而且不会有任何报错。
+	remaining := m.remainingLocked()
 	if m.state == StateWarning {
 		// 预警阶段用「N 秒后开始」的文案，而不是休息引导动作。
-		snap.CueText = warningCueFor(m.cur.Kind)
+		snap.CueText = warningCueFor(m.cur.Kind, remaining)
 		snap.TotalSec = int(WarningLeadTime / time.Second)
 	} else {
 		snap.CueText = CueFor(m.cur.Kind).Text
 		snap.TotalSec = int(m.cur.Duration / time.Second)
 	}
-	snap.RemainingSec = int(m.remainingLocked() / time.Second)
+	snap.RemainingSec = int(remaining / time.Second)
 	return snap
-}
-
-// warningCueFor 返回预警阶段的气泡文案（stand/move/rest 各一句）。
-//
-// 【为什么每种 kind 单独】「1 分钟后要起身」与「1 分钟后要护眼」是两件事，
-// 用统一文案会丢掉具体动作的提示；三句短语也够用，不必做通用模板。
-func warningCueFor(kind string) string {
-	switch kind {
-	case "stand":
-		return "1 分钟后该起身拉伸了"
-	case "move":
-		return "1 分钟后该走动一下了"
-	case "rest":
-		return "1 分钟后让眼睛休息一下"
-	}
-	return "1 分钟后开始休息"
 }

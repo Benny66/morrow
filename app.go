@@ -1214,7 +1214,7 @@ func (a *App) emitRestModeState() {
 //
 // 优先展示【正在影响提醒投递】的状态：
 //  1. 休息模式 Countdown —「陪你休息 mm:ss」（此刻用户已被覆盖层锁住）
-//  2. 休息模式 Warning —「1 分钟后休息」（软提示）
+//  2. 休息模式 Warning —预警措辞（与宠物气泡同源，按剩余时间分三档，见 internal/restmode）
 //  3. 智能免打扰 —「会议中 / 空闲 / 锁屏 / ...」
 //
 // 三个都不成立时返回空串，让 tray 侧隐藏顶部行。
@@ -1225,7 +1225,9 @@ func (a *App) trayStatusText() string {
 		case restmode.StateCountdown:
 			return formatTrayRemaining("陪你休息", snap.RemainingSec)
 		case restmode.StateWarning:
-			return "1 分钟后休息"
+			// 与宠物气泡同源：预警措辞的唯一出处是 internal/restmode（按剩余时间分档），
+			// 这里再写一份就会和气泡说法不一致——见 app_tray_test.go 那条断言。
+			return snap.CueText
 		}
 	}
 	if bundle := a.pauseSnapshot(); bundle != nil {

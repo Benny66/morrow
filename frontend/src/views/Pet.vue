@@ -118,7 +118,7 @@ const deferring = ref(false)
  * 休息模式快照。
  *
  * 三种可见状态在宠物上分别对应：
- *   - warning：气泡「1 分钟后该起身拉伸了」（US-9）
+ *   - warning：气泡显示预警文案（Go 侧按真实剩余分三档算好放进 cue_text，US-9）
  *   - countdown：宠物切到「陪做」姿态 + 气泡「陪你休息」+ 剩余秒数（US-27）
  *   - 其他（idle/done/skipped）：宠物不介入，走原有 pending 通道
  */

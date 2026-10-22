@@ -42,7 +42,7 @@
 | `internal/sit/` | 久坐领域层：全局时钟/分级空闲/情绪/专注会话/软提醒策略/记忆/文案/类别与对外契约 |
 | `internal/scenariotemplate/` | 场景模板唯一真相：5 个内置模板、目录、按目标过滤/按工作时段裁切/目标夹取的纯函数 |
 | `internal/ai/` | OpenAI 兼容的最小客户端（计划生成 + `quickadd.go` 一次性/周期草稿解析；`parse.go` 容错 JSON） |
-| `internal/guard/` | 架构护栏（以 go test 形式运行，含契约护栏与**前端镜像一致性**护栏） |
+| `internal/guard/` | 架构护栏（以 go test 形式运行，含契约护栏、**前端镜像一致性**护栏与**预警措辞单一出处**护栏 `warning_wording_test.go`） |
 
 ## 前端（`frontend/src/`）
 

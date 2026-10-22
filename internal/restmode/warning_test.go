@@ -1,9 +1,60 @@
 package restmode
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestWarningCueTiersFollowRemaining 预警文案必须跟真实剩余一致。
+//
+// 【产品语义】「1 分钟后」在只剩 8 秒时是一句谎话——用户按它行动，结果被覆盖层打断。
+// 三档边界（>30 / >10 且 ≤30 / ≤10）与四类 kind 的措辞都在这里钉住；
+// 期望值取自规格 docs/specs/2026-10-22-rest-warning-survival.md §3.C 的表，不从代码反推。
+func TestWarningCueTiersFollowRemaining(t *testing.T) {
+	base := time.Date(2026, 10, 22, 10, 0, 0, 0, time.Local)
+	fire := base.Add(WarningLeadTime) // 10:01:00 到点，预警从 10:00:00 起
+
+	cases := []struct {
+		desc string
+		now  time.Time
+		kind string
+		want string
+	}{
+		{"刚进入预警剩 60 秒", base, "stand", "1 分钟后该起身拉伸了"},
+		{"剩 45 秒", base.Add(15 * time.Second), "stand", "1 分钟后该起身拉伸了"},
+		{"剩 30 秒（恰在下界）", base.Add(30 * time.Second), "stand", "半分钟后该起身拉伸了"},
+		{"剩 11 秒", base.Add(49 * time.Second), "stand", "半分钟后该起身拉伸了"},
+		{"剩 10 秒（恰在下界）", base.Add(50 * time.Second), "stand", "马上该起身拉伸了"},
+		{"已到点剩 0 秒", fire, "stand", "马上该起身拉伸了"},
+		{"走动剩 40 秒", base.Add(20 * time.Second), "move", "1 分钟后该走动一下了"},
+		{"走动剩 20 秒", base.Add(40 * time.Second), "move", "半分钟后该走动一下了"},
+		{"走动剩 5 秒", base.Add(55 * time.Second), "move", "马上该走动一下了"},
+		{"护眼剩 40 秒", base.Add(20 * time.Second), "rest", "1 分钟后让眼睛休息一下"},
+		{"护眼剩 20 秒", base.Add(40 * time.Second), "rest", "半分钟后让眼睛休息一下"},
+		{"护眼剩 5 秒", base.Add(55 * time.Second), "rest", "马上让眼睛休息一下"},
+		{"未知类兜底剩 40 秒", base.Add(20 * time.Second), "toilet", "1 分钟后开始休息"},
+		{"未知类兜底剩 20 秒", base.Add(40 * time.Second), "toilet", "半分钟后开始休息"},
+		{"未知类兜底剩 5 秒", base.Add(55 * time.Second), "toilet", "马上开始休息"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			now := c.now
+			m := NewMachineWithClock(func() time.Time { return now })
+			if !m.EnterWarning(RestRequest{Kind: c.kind, ReminderID: 1, PlannedFireAt: fire.Unix()}) {
+				t.Fatal("测试前提：应能进入预警")
+			}
+			snap := m.Snapshot()
+			if snap.CueText != c.want {
+				t.Errorf("剩余 %d 秒时文案应为 %q，实际 %q", snap.RemainingSec, c.want, snap.CueText)
+			}
+			if snap.RemainingSec <= 10 && strings.Contains(snap.CueText, "1 分钟后") {
+				t.Errorf("剩余 ≤10 秒却仍说「1 分钟后」：%q", snap.CueText)
+			}
+		})
+	}
+}
 
 // TestWarningTransitionsToCountdown 验证 Warning → Countdown 的正常路径。
 //
