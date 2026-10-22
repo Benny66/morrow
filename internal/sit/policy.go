@@ -81,16 +81,13 @@ type MemoryDecision struct {
 	Reason string
 }
 
-// DecideMemory 决定此刻是否生成一条独立记忆气泡。
+// MemoryWindow 只检查记忆气泡的时间窗与预算，不要求已有事实。
 //
-// 记忆与软提醒共享每日 5 次预算与 30 分钟间隔，并且不抢 15 分钟内的
-// stand/move 正式提醒；没有值得说的事实就保持沉默。
-func DecideMemory(in MemoryInput) MemoryDecision {
+// 运行层先用它做廉价前置判断，避免为了“没有事实”每 5 秒查一次历史；
+// DecideMemory 复用同一份判断，防止两套条件漂移。
+func MemoryWindow(in MemoryInput) MemoryDecision {
 	if !in.Eligible {
 		return MemoryDecision{Reason: "not_eligible"}
-	}
-	if !in.HasQuote {
-		return MemoryDecision{Reason: "no_fact"}
 	}
 	if in.DailyProactive >= ProactiveBudget {
 		return MemoryDecision{Reason: "daily_budget"}
@@ -102,6 +99,20 @@ func DecideMemory(in MemoryInput) MemoryDecision {
 		if time.Unix(in.NextStandMoveAt, 0).Sub(in.Now) < NudgeGapFromPlan {
 			return MemoryDecision{Reason: "plan_too_close"}
 		}
+	}
+	return MemoryDecision{Speak: true, Reason: "window_open"}
+}
+
+// DecideMemory 决定此刻是否生成一条独立记忆气泡。
+//
+// 记忆与软提醒共享每日 5 次预算与 30 分钟间隔，并且不抢 15 分钟内的
+// stand/move 正式提醒；没有值得说的事实就保持沉默。
+func DecideMemory(in MemoryInput) MemoryDecision {
+	if window := MemoryWindow(in); !window.Speak {
+		return window
+	}
+	if !in.HasQuote {
+		return MemoryDecision{Reason: "no_fact"}
 	}
 	return MemoryDecision{Speak: true, Reason: "due"}
 }

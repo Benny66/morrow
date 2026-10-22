@@ -1365,10 +1365,10 @@ onUnmounted(() => {
     <div class="setting">
       <span class="setting__label">平台能力</span>
       <el-tag :type="sitPlatformSupported ? 'success' : 'info'" size="small">
-        {{ sitPlatformSupported ? '支持' : '当前平台不支持' }}
+        {{ sitPlatformSupported ? '基础支持' : '当前平台不支持' }}
       </el-tag>
       <span class="setting__muted">
-        {{ sitPlatformSupported ? '可读取本机空闲/锁屏；部分受限终端（尤其 Windows）可能只能读空闲' : '久坐感知不启动；正式提醒仍然可用' }}
+        {{ sitPlatformSupported ? '可读取本机空闲/锁屏；Windows 锁屏识别受会话策略影响，不可用时只保留空闲检测' : '久坐感知不启动；正式提醒仍然可用' }}
       </span>
     </div>
 

@@ -149,7 +149,10 @@ func TestClearSitProfileKeepsCheckIns(t *testing.T) {
 	if _, err := svc.StartSitBreak(session.ID, now.Add(-30*time.Minute), string(sit.BreakKindActive), 120); err != nil {
 		t.Fatalf("StartSitBreak 失败: %v", err)
 	}
-	if _, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleNudge), "nudge.base", "", "坐久了", now, time.Minute); err != nil {
+	if _, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, SessionID: session.ID, Kind: string(sit.BubbleNudge),
+		TemplateID: "nudge.base", Text: "坐久了", Now: now, TTL: time.Minute,
+	}); err != nil {
 		t.Fatalf("CreateSitSpeech 失败: %v", err)
 	}
 	app, err := svc.StartAppUsageSession("darwin", "com.example.unknown", now.Add(-40*time.Minute))

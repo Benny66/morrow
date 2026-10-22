@@ -618,8 +618,8 @@ func (a *App) ExportDatabase(targetPath string, includeSitProfile bool) error {
 // 失败自动回滚到导入前状态（见 internal/service/import.go）；成功后建议重启应用，
 // 让各页面以新库数据重新加载（前端在恢复成功提示中说明）。
 //
-// 导入会整体替换数据库；先停久坐采样，成功后收尾备份里可能残留的开放会话并重置
-// 内存 Tracker，避免旧 session/id 继续写进新库。
+// 导入会整体替换数据库；先停久坐采样与提醒引擎，成功后收尾备份里可能残留的
+// 开放会话并重置内存 Tracker，避免旧 session/id 继续写进新库。
 func (a *App) ImportDatabase(sourcePath string) error {
 	if a.svc == nil {
 		return apperr.New(apperr.CodeInternal, "服务尚未初始化")
@@ -627,6 +627,10 @@ func (a *App) ImportDatabase(sourcePath string) error {
 	running := a.sit != nil && a.sit.cancel != nil
 	if running {
 		a.sit.stop()
+	}
+	engineRunning := a.engine != nil && a.engine.Running()
+	if engineRunning {
+		a.engine.Stop()
 	}
 	err := a.svc.ImportDatabase(appName, sourcePath)
 	if a.sit != nil {
@@ -646,6 +650,9 @@ func (a *App) ImportDatabase(sourcePath string) error {
 		if running {
 			a.sit.start()
 		}
+	}
+	if engineRunning {
+		a.engine.Start()
 	}
 	return err
 }
@@ -1870,7 +1877,9 @@ func (a *App) SetSitSettings(in config.SitSettings) error {
 	a.syncSettingsFromConfig()
 	// 语气切换后旧语气的待展示气泡不再弹出，下一条用新语气。
 	if oldTone != sit.NormalizeTone(string(in.Tone)) && a.svc != nil {
-		_ = a.svc.ExpireSitSpeeches(time.Now())
+		if err := a.svc.ExpireSitSpeeches(time.Now()); err != nil {
+			slog.Warn("切换语气后清理旧气泡失败", "err", err)
+		}
 	}
 	return nil
 }
@@ -1900,7 +1909,7 @@ func (a *App) AckSitBubble(id string) bool {
 	return ok
 }
 
-// TakeActiveBreak 处理「起来走走」：清零久坐、记录休息；目标抵扣在 004 接入。
+// TakeActiveBreak 处理「起来走走」：清零久坐、记录休息并抵扣目标。
 func (a *App) TakeActiveBreak(bubbleID string) (sit.SitActionResult, error) {
 	if a.sit == nil {
 		return sit.SitActionResult{}, apperr.New(apperr.CodeInternal, "久坐感知尚未就绪")
@@ -2127,7 +2136,7 @@ func (a *App) GetPauseState() service.PauseState {
 	if !snap.ExitedAt.IsZero() {
 		state.PresentationExitedAt = snap.ExitedAt.Unix()
 	}
-	// 建议与捕获排除的字段在这里补齐；建议在 006 接入，捕获排除是平台能力。
+	// 建议与捕获排除的字段在这里补齐；捕获排除是平台能力。
 	state.CaptureExclusionSupported = captureProtectionSupported()
 	return state
 }

@@ -112,41 +112,41 @@ var quoteTemplates = []quoteSpec{
 	{
 		id: "evening",
 		text: map[Tone]string{
-			ToneSassy:  "晚上已经坐了 {n} 分钟，椅子今天挺黏你。起来走两步？",
-			ToneLively: "晚上也坐了 {n} 分钟啦，起来活动一下下？",
-			ToneGentle: "晚上已经坐了 {n} 分钟，起来活动一下吧。",
+			ToneSassy:  "晚上已经坐了 {n} 分钟，椅子今天挺黏你。",
+			ToneLively: "晚上也坐了 {n} 分钟啦，今天挺能坐。",
+			ToneGentle: "晚上已经坐了 {n} 分钟。",
 		},
 	},
 	{
 		id: "afternoon",
 		text: map[Tone]string{
-			ToneSassy:  "下午这 {n} 分钟坐得很稳。稳到椅子都替你着急，起来走两步？",
-			ToneLively: "下午已经坐了 {n} 分钟咯，起来伸个懒腰？",
-			ToneGentle: "下午已经坐了 {n} 分钟，起来活动一下吧。",
+			ToneSassy:  "下午这 {n} 分钟坐得很稳，稳到椅子都替你着急。",
+			ToneLively: "下午已经坐了 {n} 分钟咯，坐功见长。",
+			ToneGentle: "下午已经坐了 {n} 分钟。",
 		},
 	},
 	{
 		id: "late_night",
 		text: map[Tone]string{
-			ToneSassy:  "这个点还坐了 {n} 分钟。夜可以熬，腿得动，起来走两步？",
-			ToneLively: "这么晚还坐了 {n} 分钟，起来晃晃再继续？",
-			ToneGentle: "这么晚还坐了 {n} 分钟，起来活动一下再继续吧。",
+			ToneSassy:  "这个点还坐了 {n} 分钟。夜可以熬，椅子不困。",
+			ToneLively: "这么晚还坐了 {n} 分钟，精神可嘉。",
+			ToneGentle: "这么晚还坐了 {n} 分钟。",
 		},
 	},
 	{
 		id: "weekday",
 		text: map[Tone]string{
-			ToneSassy:  "{weekday}是你的久坐高峰，平均 {n} 分钟。今天别又坐满，起来走两步？",
-			ToneLively: "{weekday}平均要坐 {n} 分钟，今天起来晃一晃？",
-			ToneGentle: "{weekday}你平均会坐 {n} 分钟，今天记得起来活动。",
+			ToneSassy:  "{weekday}是你的久坐高峰，平均 {n} 分钟。今天别又坐满。",
+			ToneLively: "{weekday}平均要坐 {n} 分钟，今天看看能不能少一点。",
+			ToneGentle: "{weekday}你平均会坐 {n} 分钟。",
 		},
 	},
 	{
 		id: "week_up_breaks",
 		text: map[Tone]string{
-			ToneSassy:  "这周主动起身比上周多了 {n} 次。行，腿还算听话，继续保持。",
-			ToneLively: "这周主动起身比上周多了 {n} 次，厉害呀，继续保持！",
-			ToneGentle: "这周主动起身比上周多了 {n} 次，做得很好，继续保持。",
+			ToneSassy:  "这周主动起身比上周多了 {n} 次。行，腿还算听话。",
+			ToneLively: "这周主动起身比上周多了 {n} 次，进步看得见！",
+			ToneGentle: "这周主动起身比上周多了 {n} 次，做得很好。",
 		},
 	},
 	{
@@ -160,25 +160,25 @@ var quoteTemplates = []quoteSpec{
 	{
 		id: "week_down_sitting",
 		text: map[Tone]string{
-			ToneSassy:  "这周久坐比上周多了 {n} 分钟。椅子很高兴，你的腿未必。起来走两步？",
-			ToneLively: "这周久坐比上周多了 {n} 分钟，起来晃晃把数字追回来？",
-			ToneGentle: "这周久坐比上周多了 {n} 分钟，接下来多起来活动一下。",
+			ToneSassy:  "这周久坐比上周多了 {n} 分钟。椅子很高兴，你的腿未必。",
+			ToneLively: "这周久坐比上周多了 {n} 分钟。",
+			ToneGentle: "这周久坐比上周多了 {n} 分钟。",
 		},
 	},
 	{
 		id: "longest",
 		text: map[Tone]string{
-			ToneSassy:  "今天最长一口气坐了 {n} 分钟。椅子都记住你了，起来走两步？",
-			ToneLively: "今天最长连续坐了 {n} 分钟，起来活动一下下？",
-			ToneGentle: "今天最长连续坐了 {n} 分钟，起来活动一下吧。",
+			ToneSassy:  "今天最长一口气坐了 {n} 分钟。椅子都记住你了。",
+			ToneLively: "今天最长连续坐了 {n} 分钟，坐功了得。",
+			ToneGentle: "今天最长连续坐了 {n} 分钟。",
 		},
 	},
 	{
 		id: "category",
 		text: map[Tone]string{
-			ToneSassy:  "今天在「{category}」上花了 {n} 分钟。专注是好事，坐穿椅子不是，起来走两步？",
-			ToneLively: "今天「{category}」占了 {n} 分钟，起来晃晃换换脑子？",
-			ToneGentle: "今天「{category}」已经花了 {n} 分钟，起来活动一下再继续。",
+			ToneSassy:  "今天在「{category}」上花了 {n} 分钟。专注是好事，坐穿椅子不是。",
+			ToneLively: "今天「{category}」占了 {n} 分钟，专注度拉满。",
+			ToneGentle: "今天「{category}」已经花了 {n} 分钟。",
 		},
 	},
 	{
@@ -192,9 +192,9 @@ var quoteTemplates = []quoteSpec{
 	{
 		id: "skips",
 		text: map[Tone]string{
-			ToneSassy:  "最近你跳过了 {n} 次提醒。提醒可以被跳过，椅子不会自己挪，起来走两步？",
-			ToneLively: "最近跳过了 {n} 次提醒，起来动一动把节奏找回来？",
-			ToneGentle: "最近跳过了 {n} 次提醒，忙的话也记得短暂起来活动一下。",
+			ToneSassy:  "最近你跳过 {skips} 次、推迟 {snoozes} 次提醒。提醒可以跳过，椅子不会自己挪。",
+			ToneLively: "最近跳过 {skips} 次、推迟 {snoozes} 次提醒，节奏可以再找找。",
+			ToneGentle: "最近跳过 {skips} 次、推迟 {snoozes} 次提醒。",
 		},
 	},
 }
@@ -270,7 +270,10 @@ func SelectQuote(now time.Time, facts MemoryFacts, tone Tone, history []string) 
 		add("breaks", map[string]string{"n": strconv.Itoa(facts.TodayActiveBreaks), "total": strconv.Itoa(facts.TodayBreaks)})
 	}
 	if count := facts.RecentSkips + facts.RecentSnoozes; count >= 3 {
-		add("skips", map[string]string{"n": strconv.Itoa(count)})
+		add("skips", map[string]string{
+			"skips":   strconv.Itoa(facts.RecentSkips),
+			"snoozes": strconv.Itoa(facts.RecentSnoozes),
+		})
 	}
 
 	for _, c := range candidates {

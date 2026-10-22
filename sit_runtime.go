@@ -58,6 +58,9 @@ type sitRuntime struct {
 	lastMemoryAttemptAt time.Time
 	// lastMemoryCheckAt 限制「没有值得说的事实」时的查询频率。
 	lastMemoryCheckAt time.Time
+	// focusWasActive / focusEndedAt 用于区分「专注刚结束」的记忆机会。
+	focusWasActive bool
+	focusEndedAt   time.Time
 
 	// 应用画像采样运行态。
 	appSessionID  uint
@@ -202,6 +205,11 @@ func (r *sitRuntime) tick() {
 		Category: focusCategory,
 	})
 	res.Snapshot = r.tracker.Snapshot()
+	focusActive := res.Snapshot.Focus != nil
+	if r.focusWasActive && !focusActive {
+		r.focusEndedAt = now
+	}
+	r.focusWasActive = focusActive
 
 	quiet := reminder.InQuietHours(now, settings.QuietStart, settings.QuietEnd)
 	pending := r.pendingCount()
@@ -257,7 +265,7 @@ func (r *sitRuntime) handleEvents(events []sit.Event, now time.Time, settings si
 			if ev.EndReason == sit.EndReasonActiveBreak ||
 				ev.EndReason == sit.EndReasonLockBreak ||
 				ev.EndReason == sit.EndReasonIdleBreak {
-				_ = r.app.svc.ExpireSitSpeeches(now)
+				r.expireSpeeches(now)
 			}
 		case sit.EventBreakStarted:
 			sessionID := r.sessionID
@@ -295,7 +303,8 @@ func (r *sitRuntime) handleEvents(events []sit.Event, now time.Time, settings si
 				r.creditLockBreak(ev, now)
 			}
 			if ev.Text != "" && settings.PetVisible {
-				_ = r.app.svc.ExpireSitSpeeches(now)
+				r.expireSpeeches(now)
+				// 欢迎回来本身就是记忆机会：记忆句搭同一条 greeting，不再额外冒独立气泡。
 				ctx := r.memoryContext(now, settings, 0)
 				text, templateID := sit.SelectGreetingText(ev.Duration, settings.Tone, ctx.GreetingTemplateIDs)
 				memoryID := ""
@@ -350,20 +359,30 @@ func (r *sitRuntime) createSpeech(kind sit.BubbleKind, templateID, memoryID, tex
 	if sessionID == 0 {
 		sessionID = r.lastClosedSessionID
 	}
-	if _, err := r.app.svc.CreateSitSpeech(
-		now.Format(model.DateLayout),
-		sessionID,
-		string(kind),
-		templateID,
-		memoryID,
-		text,
-		now,
-		sit.BubbleTTL,
-	); err != nil {
+	if _, err := r.app.svc.CreateSitSpeech(service.SitSpeechInput{
+		DateKey:    now.Format(model.DateLayout),
+		SessionID:  sessionID,
+		Kind:       string(kind),
+		TemplateID: templateID,
+		MemoryID:   memoryID,
+		Text:       text,
+		Now:        now,
+		TTL:        sit.BubbleTTL,
+	}); err != nil {
 		slog.Warn("创建宠物久坐气泡失败", "err", err)
 		return
 	}
 	r.lastMemoryAttemptAt = now
+}
+
+// expireSpeeches 让未确认的旧气泡立即过期；失败只影响旧气泡，不阻断状态变更。
+func (r *sitRuntime) expireSpeeches(now time.Time) {
+	if r.app == nil || r.app.svc == nil {
+		return
+	}
+	if err := r.app.svc.ExpireSitSpeeches(now); err != nil {
+		slog.Warn("清理待展示久坐气泡失败", "err", err)
+	}
 }
 
 // memoryContext 读取记忆事实与近期模板；失败时退回无记忆的基础文案。
@@ -456,16 +475,16 @@ func (r *sitRuntime) maybeNudge(now time.Time, res sit.TickResult, settings sitR
 		text += " " + quote.Text
 		memoryID = quote.ID
 	}
-	if _, err := r.app.svc.CreateSitSpeech(
-		today,
-		r.sessionID,
-		string(sit.BubbleNudge),
-		templateID,
-		memoryID,
-		text,
-		now,
-		sit.BubbleTTL,
-	); err != nil {
+	if _, err := r.app.svc.CreateSitSpeech(service.SitSpeechInput{
+		DateKey:    today,
+		SessionID:  r.sessionID,
+		Kind:       string(sit.BubbleNudge),
+		TemplateID: templateID,
+		MemoryID:   memoryID,
+		Text:       text,
+		Now:        now,
+		TTL:        sit.BubbleTTL,
+	}); err != nil {
 		slog.Warn("创建久坐软提醒失败", "err", err)
 		return false
 	}
@@ -488,16 +507,19 @@ func (r *sitRuntime) maybeMemory(now time.Time, res sit.TickResult, settings sit
 	if r.app == nil || r.app.svc == nil {
 		return
 	}
-	if budget.DailyProactive >= sit.ProactiveBudget {
-		return
-	}
-	if budget.LastProactiveAt > 0 && now.Sub(time.Unix(budget.LastProactiveAt, 0)) < sit.ProactiveGap {
+	window := sit.MemoryWindow(sit.MemoryInput{
+		Now:             now,
+		NextStandMoveAt: nextPlan,
+		DailyProactive:  budget.DailyProactive,
+		LastProactiveAt: budget.LastProactiveAt,
+		Eligible:        true,
+		// MemoryWindow 不读 HasQuote；这里只做廉价时间窗判断。
+		HasQuote: true,
+	})
+	if !window.Speak {
 		return
 	}
 	if !r.lastMemoryAttemptAt.IsZero() && now.Sub(r.lastMemoryAttemptAt) < sit.ProactiveGap {
-		return
-	}
-	if nextPlan > 0 && time.Unix(nextPlan, 0).Sub(now) < sit.NudgeGapFromPlan {
 		return
 	}
 	if !r.lastMemoryCheckAt.IsZero() && now.Sub(r.lastMemoryCheckAt) < time.Minute {
@@ -518,24 +540,29 @@ func (r *sitRuntime) maybeMemory(now time.Time, res sit.TickResult, settings sit
 	if !decision.Speak {
 		return
 	}
-	if _, err := r.app.svc.CreateSitSpeech(
-		now.Format(model.DateLayout),
-		r.sessionID,
-		string(sit.BubbleMemory),
-		quote.TemplateID,
-		quote.ID,
-		quote.Text,
-		now,
-		sit.BubbleTTL,
-	); err != nil {
+	if _, err := r.app.svc.CreateSitSpeech(service.SitSpeechInput{
+		DateKey:    now.Format(model.DateLayout),
+		SessionID:  r.sessionID,
+		Kind:       string(sit.BubbleMemory),
+		TemplateID: quote.TemplateID,
+		MemoryID:   quote.ID,
+		Text:       quote.Text,
+		Now:        now,
+		TTL:        sit.BubbleTTL,
+	}); err != nil {
 		slog.Warn("创建记忆气泡失败", "err", err)
 		return
 	}
 	r.lastMemoryAttemptAt = now
+	trigger := "natural_pause"
+	if !r.focusEndedAt.IsZero() && now.Sub(r.focusEndedAt) <= 10*time.Minute {
+		trigger = "focus_end"
+		r.focusEndedAt = time.Time{}
+	}
 	slog.Info("独立记忆气泡已生成",
 		"memory_id", quote.ID,
 		"template_id", quote.TemplateID,
-		"trigger", "natural_pause",
+		"trigger", trigger,
 		"daily", budget.DailyProactive)
 }
 
@@ -633,6 +660,8 @@ func (r *sitRuntime) resetInMemoryLocked() {
 	r.snoozeUntil = time.Time{}
 	r.lastMemoryAttemptAt = time.Time{}
 	r.lastMemoryCheckAt = time.Time{}
+	r.focusWasActive = false
+	r.focusEndedAt = time.Time{}
 	r.appSessionID = 0
 	r.lastAppID = ""
 	r.lastAppTouch = time.Time{}
@@ -937,7 +966,7 @@ func (r *sitRuntime) muteToday() (sit.SitActionResult, error) {
 	}
 	r.app.syncSettingsFromConfig()
 	now := time.Now()
-	_ = r.app.svc.ExpireSitSpeeches(now)
+	r.expireSpeeches(now)
 	r.snoozeUntil = time.Time{}
 	settings := r.app.currentSitRuntimeSettings()
 	r.createSpeech(
@@ -965,7 +994,7 @@ func (r *sitRuntime) setTone(tone string) (sit.SitActionResult, error) {
 	}
 	r.app.syncSettingsFromConfig()
 	now := time.Now()
-	_ = r.app.svc.ExpireSitSpeeches(now)
+	r.expireSpeeches(now)
 	live := r.app.currentSitRuntimeSettings()
 	r.createSpeech(
 		sit.BubbleGreeting,

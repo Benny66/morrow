@@ -153,28 +153,33 @@ func (s *Service) FinishSitBreak(id uint, durationSec int) error {
 	return nil
 }
 
+// SitSpeechInput 创建一条待展示宠物发言所需的事实。
+// 用结构体而不是位置参数，避免 templateID/memoryID/text 三个字符串错位。
+type SitSpeechInput struct {
+	DateKey    string
+	SessionID  uint
+	Kind       string
+	TemplateID string
+	MemoryID   string
+	Text       string
+	Now        time.Time
+	TTL        time.Duration
+}
+
 // CreateSitSpeech 创建一条待展示的宠物发言。
-func (s *Service) CreateSitSpeech(
-	dateKey string,
-	sessionID uint,
-	kind string,
-	templateID string,
-	memoryID string,
-	text string,
-	now time.Time,
-	ttl time.Duration,
-) (*model.SitSpeech, error) {
+func (s *Service) CreateSitSpeech(in SitSpeechInput) (*model.SitSpeech, error) {
+	ttl := in.TTL
 	if ttl <= 0 {
 		ttl = time.Minute
 	}
 	row := &model.SitSpeech{
-		DateKey:      dateKey,
-		SitSessionID: sessionID,
-		Kind:         kind,
-		TemplateID:   templateID,
-		MemoryID:     memoryID,
-		Text:         text,
-		ExpiresAt:    now.Add(ttl).Unix(),
+		DateKey:      in.DateKey,
+		SitSessionID: in.SessionID,
+		Kind:         in.Kind,
+		TemplateID:   in.TemplateID,
+		MemoryID:     in.MemoryID,
+		Text:         in.Text,
+		ExpiresAt:    in.Now.Add(ttl).Unix(),
 	}
 	if err := s.db.Create(row).Error; err != nil {
 		return nil, apperr.Wrap(fmt.Errorf("创建宠物发言失败: %w", err))

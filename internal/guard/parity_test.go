@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"morrow/internal/sit"
 )
 
 // ---------------------------------------------------------------------------
@@ -184,6 +186,61 @@ func TestFrontendMirrorsMatchGoSourceOfTruth(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCategoryLabelsMatchFrontend 校验类别中文标签的 Go/TS 双份数据。
+//
+// 类别标签不是枚举常量，现有 parseTSObject 只认字面量键；这里单独解析
+// `[SitCategory.Coding]: '写代码'` 形式的计算键。标签漂移不会编译失败，
+// 只会让宠物记忆句与久坐页显示不同的类别名，故必须有护栏。
+func TestCategoryLabelsMatchFrontend(t *testing.T) {
+	root := projectRoot()
+	data, err := os.ReadFile(filepath.Join(root, "frontend/src/lib/sit.ts"))
+	if err != nil {
+		t.Fatalf("读取前端类别标签失败: %v", err)
+	}
+	start := regexp.MustCompile(`^export const SIT_CATEGORY_LABEL\s*(?::[^=]+)?=\s*\{`)
+	entry := regexp.MustCompile(`^\[SitCategory\.([A-Za-z]+)\]\s*:\s*'([^']*)'\s*,?\s*$`)
+	tsLabels := map[string]string{}
+	inBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inBlock {
+			if start.MatchString(trimmed) {
+				inBlock = true
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "}") {
+			break
+		}
+		if m := entry.FindStringSubmatch(trimmed); m != nil {
+			tsLabels[strings.ToLower(m[1])] = m[2]
+		}
+	}
+	if !inBlock || len(tsLabels) == 0 {
+		t.Fatal("未能解析 SIT_CATEGORY_LABEL——写法可能已变更，请同步更新护栏规则")
+	}
+
+	want := map[string]string{}
+	for _, category := range sit.AllCategories() {
+		want[strings.ToLower(string(category))] = sit.CategoryLabel(category)
+	}
+	for key, value := range want {
+		got, ok := tsLabels[key]
+		if !ok {
+			t.Errorf("Go 类别标签 %q=%q 在前端镜像中缺失", key, value)
+			continue
+		}
+		if got != value {
+			t.Errorf("类别标签漂移：%s 前端=%q，Go=%q", key, got, value)
+		}
+	}
+	for key, value := range tsLabels {
+		if _, ok := want[key]; !ok {
+			t.Errorf("前端类别标签 %q=%q 在 Go 侧没有对应类别", key, value)
+		}
 	}
 }
 

@@ -63,11 +63,16 @@ func TestTemplatesRespectContentGuard(t *testing.T) {
 			formatted := text
 			for key, value := range map[string]string{
 				"n": "30", "category": "写代码", "weekday": "周三", "total": "3",
+				"skips": "2", "snoozes": "1",
 			} {
 				formatted = strings.ReplaceAll(formatted, "{"+key+"}", value)
 			}
 			if strings.Contains(formatted, "{") || strings.Contains(formatted, "}") {
 				t.Errorf("%s/%s 记忆模板有未填充占位符: %q", spec.id, tone, text)
+			}
+			// 记忆句只做观察：软提醒气泡本身已经带了动作，这里再出现动作词就是复读命令。
+			if hasActionWord(text) {
+				t.Errorf("%s/%s 记忆模板重复了软提醒的动作指令: %q", spec.id, tone, text)
 			}
 		}
 	}

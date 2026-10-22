@@ -88,6 +88,25 @@
 5. 设置页 Windows 锁屏能力文案过于绝对——改为「部分受限终端可能只能读空闲」，README 记录同一限制。
 6. 文档新增 `openspec/specs/sit-awareness/spec.md` 能力基线；README 增加久坐感知/毒舌健康搭子、隐私边界与四步引导。
 
+### 双轴审查（`main...75fe417`）后的修复
+
+规范轴：
+
+7. 类别中文标签在 Go 与 `lib/sit.ts` 各有一份却没有护栏——新增 `TestCategoryLabelsMatchFrontend`（解析计算键，0 结果即报错）；注入 `TEMP_DRIFT` 验证会红后还原。
+8. `DecideMemory` 与 `Policy` 各写了一遍预算/间隔判断——抽出 `MemoryWindow`，`DecideMemory` 只做窗口 + 有无事实。
+9. `CreateSitSpeech` 8 个位置参数易串位——改 `service.SitSpeechInput` 结构体，调用点与测试同步。
+10. 过期气泡失败用 `_ =` 吞掉、注释与实现不符（`TakeActiveBreak`/绑定层）——统一 `expireSpeeches` 并记 warn，清理三处陈旧注释。
+11. `ImportDatabase` 只停久坐运行时、没停提醒引擎，恢复后引擎仍握着旧库句柄——新增 `Engine.Running()`，导入前停引擎、成功后按序重启。
+
+规格轴：
+
+12. E-6「无启用场景」与「场景无站立/走动」共用一条文案——拆成 `noScenario`/`noStandMove` 两态，各自给入口；GUI 用真实开关复核。
+13. E-5 趋势缺最长连续与类别概览，且 7 个窄列装不下四项文字——改为横向条形列表（日期 / 条形 / 久坐·最长·起·休·主要类别），窄窗下逐行换行；真实 GUI 在 1023px 与 680px 两种宽度量过行高与溢出。
+14. 记忆句自带「起来走走」式动作，与同一条软提醒的按钮复读命令——模板只留观察，新增护栏断言记忆模板不得含动作词（注入即红）。
+15. D-8「跳过/推迟」混用一个计数——`skips` 模板改为 `{skips}`/`{snoozes}` 两个变量；设置页「平台能力」由「支持」改为「基础支持」并如实写明 Windows 锁屏降级；专注结束作为触发点在运行日志里区分 `focus_end` 与 `natural_pause`。
+
+无范围蔓延：审查未发现规格外新功能被夹带。
+
 ### 转 012 的已知验收缺口
 
 - Windows 实机：应用采样、Win+L、锁屏抵扣门槛、安装包/单实例。

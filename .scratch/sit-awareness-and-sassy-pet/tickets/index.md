@@ -42,7 +42,7 @@
 | 008 | `008-focus-session-restraint.md` | 已完成（真实 10 分钟墙钟 GUI 未跑） | 006、003 | 专注 40 分钟不冒，切出后按规则补一次 |
 | 009 | `009-memory-facts-and-tone.md` | 已完成 | 006、008、003 | 记忆句、三档语气、别这样说、内容护栏 |
 | 010 | `010-independent-memory-bubbles.md` | 已完成 | 009 | 独立记忆气泡、完整统计、5 次/30 分钟预算 |
-| 011 | `011-acceptance-and-docs.md` | 已完成（macOS；Windows/长跑转 012） | 003–010 | 端到端验收、隐私/性能/内容审计、文档 |
+| 011 | `011-acceptance-and-docs.md` | 已完成（macOS；Windows/长跑转 012；双轴审查发现已修） | 003–010 | 端到端验收、隐私/性能/内容审计、文档 |
 | 012 | `012-platform-and-long-run-acceptance.md` | 部分完成（Windows/长跑阻塞） | 011 | Windows 实机与 macOS 长跑验收 |
 
 ## 当前进度（2026-10-22）
@@ -58,6 +58,7 @@
 - 009 完成：28 天类别级事实、时段/星期/周对比记忆句、3 天去重、三档完整文案与内容护栏；「别这样说」切温和并持久化、确认气泡、Pet 钉住 Ack 气泡；GUI 验证记忆句渲染、语气切换/重启保持。`make test`/`make lint` 全绿。
 - 010 完成：`DecideMemory` 5 次/30 分钟/15 分钟空档/无事实不生成；独立 memory 气泡共享预算、Ack 才计数、过期不计数；Pet memory 分支/静音抑制；GUI 验证展示、动作、预算与静音。`make test`/`make lint` 全绿。
 - 011 完成（macOS）：`make test`/`make lint`/`make smoke` 全绿；Windows 交叉编译；隐私审计修复 SQL 字面量日志、崩溃久坐会话收尾、恢复数据库后运行态重置；README/CONTEXT/ADR/openspec/map/pet-character/设置文案同步。Windows 实机与长跑验收登记为 012。
+- 011 双轴审查（`main...75fe417`）后的修复：类别标签加 Go/TS 护栏（注入漂移即变红）；`MemoryWindow` 收敛记忆预算判定、去掉与 `DecideMemory` 的重复；`CreateSitSpeech` 改结构体入参；过期气泡失败不再 `_ =` 吞掉（统一 `expireSpeeches` 记 warn）；恢复数据库时同时停/启提醒引擎（新增 `Engine.Running`）；E-6 拆成「无启用场景」与「场景无站立/走动」两态；E-5 趋势补最长连续与主要类别并改为横向条形列表（7 个窄列放不下四项文字，窄窗下逐行自然换行）；记忆句去掉重复动作并加护栏；「平台能力」改「基础支持」并如实说明 Windows 锁屏降级；跳过/推迟措辞分开；专注结束作为触发点写入 `trigger=focus_end`。`make test`/`make lint`/Windows 交叉编译再次全绿，趋势与两个空状态经真实 GUI 复核。
 - 012 部分完成：macOS 导出/恢复后无残留开放会话、Tracker 重置；打开客户端主窗可见（聚焦未确认）；模板内部审校+护栏。Windows 实机、60/90、真实 10 分钟专注、锁屏抵扣门槛、1 小时 CPU、预算压满仍阻塞在环境/连续时间窗口，未虚报。
 - 当前交付状态：001–011 已完成；012 为验收补充，不阻塞功能交付。
 

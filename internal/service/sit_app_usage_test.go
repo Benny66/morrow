@@ -357,14 +357,23 @@ func TestClearAppProfileKeepsSitAndCheckIns(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("写入类别纠正失败: %v", err)
 	}
-	if _, err := svc.CreateSitSpeech(dateKey, 0, string(sit.BubbleMemory), "memory.test", "", "记忆", now, time.Minute); err != nil {
+	if _, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, Kind: string(sit.BubbleMemory), TemplateID: "memory.test",
+		Text: "记忆", Now: now, TTL: time.Minute,
+	}); err != nil {
 		t.Fatalf("创建记忆发言失败: %v", err)
 	}
-	if _, err := svc.CreateSitSpeech(dateKey, 0, string(sit.BubbleNudge), "nudge.test", "", "提醒", now, time.Minute); err != nil {
+	if _, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, Kind: string(sit.BubbleNudge), TemplateID: "nudge.test",
+		Text: "提醒", Now: now, TTL: time.Minute,
+	}); err != nil {
 		t.Fatalf("创建软提醒发言失败: %v", err)
 	}
 	// 带记忆句的普通软提醒也属于派生记忆，关闭画像删除历史时应一并清掉。
-	if _, err := svc.CreateSitSpeech(dateKey, 0, string(sit.BubbleNudge), "nudge.test2", "evening", "提醒 + 记忆", now, time.Minute); err != nil {
+	if _, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, Kind: string(sit.BubbleNudge), TemplateID: "nudge.test2",
+		MemoryID: "evening", Text: "提醒 + 记忆", Now: now, TTL: time.Minute,
+	}); err != nil {
 		t.Fatalf("创建带记忆的软提醒失败: %v", err)
 	}
 	if err := svc.db.Create(&model.CheckIn{

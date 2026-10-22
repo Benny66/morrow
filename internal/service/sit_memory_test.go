@@ -58,11 +58,17 @@ func TestSitMemoryContextFactsAndHistory(t *testing.T) {
 		}
 	}
 
-	recent, err := svc.CreateSitSpeech(dateKey, 0, string(sit.BubbleNudge), "nudge.sassy.base", "evening", "晚上坐久了", now, time.Minute)
+	recent, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, Kind: string(sit.BubbleNudge), TemplateID: "nudge.sassy.base",
+		MemoryID: "evening", Text: "晚上坐久了", Now: now, TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("创建近期发言失败: %v", err)
 	}
-	old, err := svc.CreateSitSpeech(dateKey, 0, string(sit.BubbleNudge), "nudge.sassy.2", "old_fact", "旧记忆", now, time.Minute)
+	old, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, Kind: string(sit.BubbleNudge), TemplateID: "nudge.sassy.2",
+		MemoryID: "old_fact", Text: "旧记忆", Now: now, TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("创建旧发言失败: %v", err)
 	}

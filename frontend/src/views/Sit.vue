@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 // 「久坐」页：把连续用机、休息与抵扣变成可核对的事实。
-// 这一版只展示时间/休息/抵扣与站立走动目标；应用画像与按日应用明细在 006/007。
+// 「久坐」页：把连续用机、休息、抵扣、应用画像与按日明细变成可核对的事实。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Confirm,
@@ -91,7 +91,8 @@ const breakTotal = computed(() => {
   return d.active_breaks + d.lock_breaks + d.idle_breaks
 })
 const platformSupported = computed(() => snapshot.value?.platform_supported ?? true)
-const noStandMove = computed(() => !stats.value?.scenario || goalReminders.value.length === 0)
+const noScenario = computed(() => !stats.value?.scenario)
+const noStandMove = computed(() => !!stats.value?.scenario && goalReminders.value.length === 0)
 const maxTrendMinutes = computed(() => Math.max(1, ...trend.value.map((d) => d.sitting_minutes)))
 
 const profileEnabled = computed(() => snapshot.value?.profile_enabled ?? false)
@@ -142,9 +143,14 @@ function trendLabel(dateKey: string): string {
   return dateKey.length >= 10 ? dateKey.slice(5) : dateKey
 }
 
-function barHeight(minutes: number): string {
+function barWidth(minutes: number): string {
   if (minutes <= 0) return '2px'
   return `${Math.max(4, Math.round((minutes / maxTrendMinutes.value) * 100))}%`
+}
+
+function topTrendCategory(item: SitDay): string {
+  const top = [...(item.categories ?? [])].sort((a, b) => b.minutes - a.minutes)[0]
+  return top && top.minutes > 0 ? `${sitCategoryLabel(top.category)} ${top.minutes}` : '未记录'
 }
 
 async function refresh(): Promise<void> {
@@ -276,14 +282,23 @@ onUnmounted(() => {
       <p>正式提醒仍然可用；久坐软提醒与数据统计在当前平台不启动。</p>
     </div>
 
-    <div v-else-if="noStandMove" class="sit-state">
-      <h2>还没有站立/走动计划</h2>
+    <div v-else-if="noScenario" class="sit-state">
+      <h2>还没有启用场景</h2>
       <p>
-        久坐感知只在当前场景包含站立或走动提醒时启用。先去
-        <router-link to="/plan">计划页</router-link>
-        添加一条，或到
+        久坐感知需要一个启用的场景，并且包含站立或走动提醒。先去
         <router-link to="/scenarios">场景页</router-link>
-        选一个带站立的模板。
+        启用或创建一个场景。
+      </p>
+    </div>
+
+    <div v-else-if="noStandMove" class="sit-state">
+      <h2>当前场景没有站立/走动提醒</h2>
+      <p>
+        久坐感知只在当前场景包含站立或走动提醒时启用。去
+        <router-link to="/plan">计划页</router-link>
+        添加一条站立/走动提醒，或到
+        <router-link to="/scenarios">场景页</router-link>
+        换一个带站立的模板。
       </p>
     </div>
 
@@ -353,24 +368,27 @@ onUnmounted(() => {
       <div class="sit-card">
         <div class="sit-card__head">
           <h2 class="sit-card__title">最近 7 天</h2>
-          <span class="sit-muted">点柱子查看那天的应用明细</span>
+          <span class="sit-muted">点一天查看那天的应用明细</span>
         </div>
-        <div class="sit-bars">
+        <div class="sit-trend">
           <button
             v-for="item in trend"
             :key="item.date_key"
             type="button"
-            class="sit-bars__item"
+            class="sit-trend__row"
             :class="{ 'is-selected': item.date_key === selectedDate }"
-            :aria-label="`查看 ${item.date_key} 的久坐与应用明细`"
+            :aria-label="`查看 ${item.date_key} 的久坐、休息与类别`"
             @click="selectTrendDate(item.date_key)"
           >
-            <span class="sit-bars__value">{{ item.sitting_minutes }}</span>
-            <span class="sit-bars__track">
-              <span class="sit-bars__bar" :style="{ height: barHeight(item.sitting_minutes) }" />
+            <span class="sit-trend__date">{{ trendLabel(item.date_key) }}</span>
+            <span class="sit-trend__track">
+              <span class="sit-trend__bar" :style="{ width: barWidth(item.sitting_minutes) }" />
             </span>
-            <span class="sit-bars__date">{{ trendLabel(item.date_key) }}</span>
-            <span class="sit-bars__break">起 {{ item.active_breaks }} · 休 {{ item.lock_breaks + item.idle_breaks }}</span>
+            <span class="sit-trend__meta">
+              久坐 {{ item.sitting_minutes }} · 最长 {{ item.longest_session_minutes }} · 起
+              {{ item.active_breaks }} · 休 {{ item.lock_breaks + item.idle_breaks }}
+              <template v-if="profileEnabled"> · {{ topTrendCategory(item) }}</template>
+            </span>
           </button>
         </div>
       </div>
@@ -611,76 +629,71 @@ onUnmounted(() => {
   font-size: var(--font-size-xs);
 }
 
-.sit-bars {
+.sit-trend {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  min-height: 150px;
-  padding-top: 8px;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
 }
 
-.sit-bars__item {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
+.sit-trend__row {
+  display: grid;
+  grid-template-columns: 44px 96px 1fr;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 0;
+  gap: 10px;
+  padding: 6px 8px;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
+  text-align: left;
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
 
-.sit-bars__item:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 4px;
+.sit-trend__row:hover {
+  background: var(--bg-subtle);
 }
 
-.sit-bars__item.is-selected .sit-bars__track {
+.sit-trend__row:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
-.sit-bars__item.is-selected .sit-bars__value,
-.sit-bars__item.is-selected .sit-bars__date {
+.sit-trend__row.is-selected {
+  background: var(--color-primary-soft);
+}
+
+.sit-trend__row.is-selected .sit-trend__date {
   color: var(--color-primary);
   font-weight: 600;
 }
 
-.sit-bars__value {
+.sit-trend__date {
   color: var(--text-2);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-.sit-bars__track {
-  display: flex;
-  align-items: flex-end;
-  width: 100%;
-  height: 100px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+.sit-trend__track {
+  height: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-base);
 }
 
-.sit-bars__bar {
-  width: 100%;
-  min-height: 2px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+.sit-trend__bar {
+  display: block;
+  min-width: 2px;
+  height: 100%;
+  border-radius: var(--radius-sm);
   background: var(--color-primary);
+  transition: width 240ms ease;
 }
 
-.sit-bars__date {
-  color: var(--text-2);
-  font-size: 11px;
-}
-
-.sit-bars__break {
+.sit-trend__meta {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .sit-apps {

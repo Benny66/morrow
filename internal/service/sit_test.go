@@ -68,7 +68,10 @@ func TestSitSpeechPendingAckBudget(t *testing.T) {
 		t.Fatalf("StartSitSession 失败: %v", err)
 	}
 
-	nudge, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleNudge), "nudge.sassy.base", "", "坐了很久了", now, time.Minute)
+	nudge, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, SessionID: session.ID, Kind: string(sit.BubbleNudge),
+		TemplateID: "nudge.sassy.base", Text: "坐了很久了", Now: now, TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("CreateSitSpeech 失败: %v", err)
 	}
@@ -100,7 +103,10 @@ func TestSitSpeechPendingAckBudget(t *testing.T) {
 	}
 
 	// greeting 不占主动发言预算。
-	greeting, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleGreeting), "greeting.base", "", "回来啦", now.Add(time.Minute), time.Minute)
+	greeting, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, SessionID: session.ID, Kind: string(sit.BubbleGreeting),
+		TemplateID: "greeting.base", Text: "回来啦", Now: now.Add(time.Minute), TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("CreateSitSpeech greeting 失败: %v", err)
 	}
@@ -116,7 +122,11 @@ func TestSitSpeechPendingAckBudget(t *testing.T) {
 	}
 
 	// 独立记忆气泡与软提醒共享每日预算；只按 Ack 计数。
-	memory, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleMemory), "memory.sassy.longest", "longest", "今天坐了很久", now.Add(2*time.Minute), time.Minute)
+	memory, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, SessionID: session.ID, Kind: string(sit.BubbleMemory),
+		TemplateID: "memory.sassy.longest", MemoryID: "longest", Text: "今天坐了很久",
+		Now: now.Add(2 * time.Minute), TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("CreateSitSpeech memory 失败: %v", err)
 	}
@@ -144,10 +154,17 @@ func TestSitSpeechExpire(t *testing.T) {
 	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.Local)
 	dateKey := now.Format(model.DateLayout)
 	session, _ := svc.StartSitSession(now)
-	if _, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleNudge), "nudge.base", "", "坐久了", now, time.Minute); err != nil {
+	if _, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, SessionID: session.ID, Kind: string(sit.BubbleNudge),
+		TemplateID: "nudge.base", Text: "坐久了", Now: now, TTL: time.Minute,
+	}); err != nil {
 		t.Fatalf("CreateSitSpeech 失败: %v", err)
 	}
-	if _, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleMemory), "memory.gentle.longest", "longest", "记忆", now, time.Minute); err != nil {
+	if _, err := svc.CreateSitSpeech(SitSpeechInput{
+		DateKey: dateKey, SessionID: session.ID, Kind: string(sit.BubbleMemory),
+		TemplateID: "memory.gentle.longest", MemoryID: "longest", Text: "记忆",
+		Now: now, TTL: time.Minute,
+	}); err != nil {
 		t.Fatalf("CreateSitSpeech memory 失败: %v", err)
 	}
 	if err := svc.ExpireSitSpeeches(now.Add(time.Second)); err != nil {

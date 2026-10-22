@@ -105,6 +105,13 @@ func NewEngine(opts Options) *Engine {
 	return engine
 }
 
+// Running 返回调度循环是否在运行；供数据库恢复等需要短暂停机的流程判断。
+func (e *Engine) Running() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cancel != nil
+}
+
 // Start 启动调度循环（已启动时是幂等的空操作）。
 func (e *Engine) Start() {
 	e.mu.Lock()
