@@ -10,10 +10,13 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"morrow/internal/ai"
 	"morrow/internal/appdir"
+	"morrow/internal/model"
 	"morrow/internal/reminder"
+	"morrow/internal/sit"
 )
 
 // 窗口尺寸的默认值与合法范围（单一真相，config 与护栏共同引用）。
@@ -199,6 +202,19 @@ type Config struct {
 	// CalendarAskedBefore 记录是否【已经问过】日历授权；拒绝后不再弹。
 	CalendarAskedBefore bool `json:"calendar_asked_before"`
 
+	// SitEnabled 久坐感知总开关。默认开启；只在启用场景包含 stand/move 时生效。
+	SitEnabled bool `json:"sit_enabled"`
+	// SitProfileEnabled 是否记录应用使用画像。默认关闭，必须由用户显式同意后开启。
+	SitProfileEnabled bool `json:"sit_profile_enabled"`
+	// SitProfileAsked 是否已经问过应用画像同意（拒绝/接受都置 true，避免反复弹）。
+	SitProfileAsked bool `json:"sit_profile_asked"`
+	// SitNudgeThresholdMinutes 久坐软提醒阈值：45/60/90，默认 60。
+	SitNudgeThresholdMinutes int `json:"sit_nudge_threshold_minutes"`
+	// SitTone 宠物语气：sassy / lively / gentle，默认 sassy。
+	SitTone string `json:"sit_tone"`
+	// SitMutedDate 「今天先这样」的本地日期（YYYY-MM-DD）；空串表示未静音。
+	SitMutedDate string `json:"sit_muted_date"`
+
 	// PetVisible 是否显示桌面宠物窗口。关掉只是隐藏窗口，宠物包与其它配置照旧保留。
 	PetVisible bool `json:"pet_visible"`
 	// PetX / PetY 宠物窗口上次所在的位置（0 表示未记录，此时用 DefaultPetX/Y）。
@@ -248,6 +264,11 @@ func Default() *Config {
 		PauseMeetingEnabled: true,
 		// 全屏检测默认【关闭】：见字段注释——避免装完就要用户授权屏幕录制的侵略感。
 		// ScreenRecordingPermissionAsked 默认 false：还没问过用户。
+		// 久坐感知默认开着，但应用画像默认关闭：基础版只用本机空闲/锁屏，
+		// 画像必须显式同意（ADR 0010）。默认毒舌见 ADR 0011。
+		SitEnabled:               true,
+		SitNudgeThresholdMinutes: sit.DefaultNudgeThresholdMinutes,
+		SitTone:                  string(sit.DefaultTone),
 		// 宠物默认开着：它是提醒的化身，关掉等于把「到点提醒」的可视化入口藏起来。
 		// 位置留 0（= 未记录），由 PetPosition 给出落点。
 		PetVisible: true,
@@ -570,6 +591,60 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// ---------------------------------------------------------------------------
+// 久坐感知
+// ---------------------------------------------------------------------------
+
+// SitSettings 是久坐感知设置的可绑定视图。
+//
+// platform_supported / profile_status / muted_today 是只读字段：前两者由绑定层
+// 按平台与实际读取状态填充，muted_today 由 SitMutedDate 与当天比较得出。
+type SitSettings struct {
+	Enabled           bool              `json:"enabled"`
+	ProfileEnabled    bool              `json:"profile_enabled"`
+	ProfileAsked      bool              `json:"profile_asked"`
+	ThresholdMinutes  int               `json:"threshold_minutes"`
+	Tone              sit.Tone          `json:"tone"`
+	PlatformSupported bool              `json:"platform_supported"`
+	ProfileStatus     sit.ProfileStatus `json:"profile_status"`
+	MutedToday        bool              `json:"muted_today"`
+}
+
+// LoadSitSettings 返回当前久坐设置（阈值/语气已归一化）。
+func (c *Config) LoadSitSettings() SitSettings {
+	return SitSettings{
+		Enabled:           c.SitEnabled,
+		ProfileEnabled:    c.SitProfileEnabled,
+		ProfileAsked:      c.SitProfileAsked,
+		ThresholdMinutes:  sit.ClampNudgeThreshold(c.SitNudgeThresholdMinutes),
+		Tone:              sit.NormalizeTone(c.SitTone),
+		PlatformSupported: false, // 由绑定层覆盖
+		ProfileStatus:     "",    // 由绑定层覆盖
+		MutedToday:        c.SitMutedToday(),
+	}
+}
+
+// SaveSitSettings 归一化并落盘久坐设置；只读字段忽略。
+func (c *Config) SaveSitSettings(in SitSettings) error {
+	c.SitEnabled = in.Enabled
+	c.SitProfileEnabled = in.ProfileEnabled
+	c.SitProfileAsked = in.ProfileAsked
+	c.SitNudgeThresholdMinutes = sit.ClampNudgeThreshold(in.ThresholdMinutes)
+	c.SitTone = string(sit.NormalizeTone(string(in.Tone)))
+	return c.Save()
+}
+
+// SitMutedToday 返回今天是否已被「今天先这样」静音。
+func (c *Config) SitMutedToday() bool {
+	return c.SitMutedDate != "" && c.SitMutedDate == time.Now().Format(model.DateLayout)
+}
+
+// MuteSitToday 把今天标记为静音；跨日后 SitMutedToday 自然返回 false。
+func (c *Config) MuteSitToday() error {
+	c.SitMutedDate = time.Now().Format(model.DateLayout)
+	return c.Save()
 }
 
 // ---------------------------------------------------------------------------

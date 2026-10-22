@@ -7,6 +7,8 @@ package database
 
 import (
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -32,6 +34,14 @@ func Init(appName string) (*gorm.DB, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
+	}
+
+	// 数据库会包含久坐/应用使用画像等敏感数据，POSIX 平台收紧到仅当前用户可读。
+	// Windows 依赖用户目录 ACL，不做 POSIX chmod。
+	if runtime.GOOS != "windows" {
+		if chmodErr := os.Chmod(dbPath, 0o600); chmodErr != nil {
+			return nil, fmt.Errorf("收紧数据库权限失败: %w", chmodErr)
+		}
 	}
 
 	if err := migrate(db); err != nil {

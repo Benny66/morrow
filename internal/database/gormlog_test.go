@@ -62,6 +62,25 @@ func TestTraceLogsSlowQuery(t *testing.T) {
 	}
 }
 
+// TestTraceRedactsStringLiterals 慢查询/错误日志不得带出应用标识、日期或文案全文。
+func TestTraceRedactsStringLiterals(t *testing.T) {
+	buf, restore := captureSlog(t)
+	defer restore()
+
+	trace(slowQueryThreshold+10*time.Millisecond,
+		"INSERT INTO app_usage_sessions (app_id, text) VALUES ('com.secret.app', \"今天坐了很久\")", nil)
+	out := buf.String()
+	if strings.Contains(out, "com.secret.app") || strings.Contains(out, "今天坐了很久") {
+		t.Errorf("SQL 日志泄露了字面量: %q", out)
+	}
+	if !strings.Contains(out, "INSERT INTO app_usage_sessions") {
+		t.Errorf("脱敏后应保留语句结构，实际: %q", out)
+	}
+	if !strings.Contains(out, "'?'") {
+		t.Errorf("应保留字面量占位，实际: %q", out)
+	}
+}
+
 // TestTraceIgnoresRecordNotFound 记录不存在是业务正常路径（service 据此返回
 // not_found），MUST NOT 记错误——否则日志会被它淹没。
 func TestTraceIgnoresRecordNotFound(t *testing.T) {

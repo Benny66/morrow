@@ -148,12 +148,20 @@ func (s *Service) SnoozeReminder(fireID uint, snoozeMinutes int) error {
 	return s.act(fireID, model.ActionSnooze, snoozeMinutes)
 }
 
-// act 是三种打卡动作的唯一实现。
+// act 是三种手动打卡动作的唯一实现。
+func (s *Service) act(fireID uint, action string, snoozeMinutes int) error {
+	return s.actWithSource(fireID, action, snoozeMinutes, model.SourceManual)
+}
+
+// actWithSource 是打卡动作的唯一实现。
 //
 // 一次动作要同时落下两处事实：
 //   - 触发记录的状态（决定它是否还出现在待处理列表里）；
 //   - 打卡记录（决定统计与连续天数）——记录永不修改，只追加。
-func (s *Service) act(fireID uint, action string, snoozeMinutes int) error {
+//
+// source 只影响 CheckIn 的来源标记（手动/主动休息/锁屏抵扣），不改变任何
+// 状态机与统计语义；未知值回落到 manual，避免脏数据污染久坐页。
+func (s *Service) actWithSource(fireID uint, action string, snoozeMinutes int, source string) error {
 	var fire model.ReminderFire
 	if err := s.db.First(&fire, fireID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -256,6 +264,7 @@ func (s *Service) act(fireID uint, action string, snoozeMinutes int) error {
 				ReminderID:  fire.ReminderID,
 				ScenarioID:  scenarioID,
 				Action:      action,
+				Source:      normalizeCheckInSource(source),
 				ScheduledAt: fire.FireAt,
 				ActedAt:     now.Unix(),
 				DateKey:     now.Format(model.DateLayout),
@@ -283,6 +292,16 @@ const (
 	// maxSnoozeMinutes 推迟时长上界，避免一条提醒被推迟到明天。
 	maxSnoozeMinutes = 120
 )
+
+// normalizeCheckInSource 把未知来源回落到 manual，避免脏数据污染久坐页。
+func normalizeCheckInSource(source string) string {
+	switch source {
+	case model.SourceActiveBreak, model.SourceLockBreak:
+		return source
+	default:
+		return model.SourceManual
+	}
+}
 
 // ListPendingFires 返回待处理提醒（status = fired 且未被处理）。
 func (s *Service) ListPendingFires() ([]PendingFire, error) {

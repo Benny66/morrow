@@ -49,6 +49,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '计划' },
   },
   {
+    path: '/sit',
+    name: 'sit',
+    component: () => import('../views/Sit.vue'),
+    meta: { title: '久坐' },
+  },
+  {
     path: '/settings',
     name: 'settings',
     component: () => import('../views/Settings.vue'),

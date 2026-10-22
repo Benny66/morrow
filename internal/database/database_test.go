@@ -1,35 +1,42 @@
 package database
 
 import (
+	"os"
+	"runtime"
 	"testing"
 
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
+	"morrow/internal/appdir"
 )
 
-// verifyModel 仅用于验证迁移框架可用，非业务模型。
-// 证明：纯 Go 驱动(glebarez) + gorm AutoMigrate 能正确建表。
-type verifyModel struct {
-	gorm.Model
-	Name string `gorm:"size:50" json:"name"`
-}
+// TestInitRestrictsDatabasePermissions 数据库含久坐/应用画像等敏感数据，
+// 在支持的平台上必须是仅当前用户可读（0600）。
+func TestInitRestrictsDatabasePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 依赖用户目录 ACL，不检查 POSIX mode")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-func TestAutoMigrateCreatesTable(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := Init("permissiontest")
 	if err != nil {
-		t.Fatalf("打开内存库失败: %v", err)
+		t.Fatalf("Init 失败: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取 sql.DB 失败: %v", err)
+	}
+	defer sqlDB.Close()
 
-	if err := db.AutoMigrate(&verifyModel{}); err != nil {
-		t.Fatalf("AutoMigrate 失败: %v", err)
+	path, err := appdir.File("permissiontest", "permissiontest.db")
+	if err != nil {
+		t.Fatalf("appdir.File 失败: %v", err)
 	}
-
-	// 断言表确实被创建（用 sqlite_master 查询）
-	var count int64
-	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='verify_models'").Scan(&count).Error; err != nil {
-		t.Fatalf("查询 sqlite_master 失败: %v", err)
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat 数据库失败: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("期望 verify_models 表存在，实际 count=%d", count)
+	if got := st.Mode().Perm(); got != 0o600 {
+		t.Errorf("数据库权限 = %o，期望 600", got)
 	}
 }

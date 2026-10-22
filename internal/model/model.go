@@ -29,6 +29,12 @@ func AllModels() []interface{} {
 		&Reminder{},
 		&ReminderFire{},
 		&CheckIn{},
+		// 久坐感知：应用会话 → 久坐会话 → 休息 / 宠物发言 / 类别纠正
+		&AppUsageSession{},
+		&SitSession{},
+		&SitBreak{},
+		&SitSpeech{},
+		&AppCategoryOverride{},
 		// gen:model
 	}
 }

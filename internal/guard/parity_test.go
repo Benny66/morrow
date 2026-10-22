@@ -89,6 +89,72 @@ func TestFrontendMirrorsMatchGoSourceOfTruth(t *testing.T) {
 			tsObject: "RestModeState",
 			goPrefix: "State",
 		},
+		{
+			// 久坐感知：Go 的 State/Mood/Tone/Category/Bubble/Action/EndReason/
+			// BreakKind/ProfileStatus 枚举；前端 lib/sit.ts 逐字镜像。镜像漂移会让
+			// 宠物气泡/久坐页按未知值降级，且没有编译错误。
+			name:     "久坐状态枚举",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitState",
+			goPrefix: "State",
+		},
+		{
+			name:     "久坐情绪枚举",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitMood",
+			goPrefix: "Mood",
+		},
+		{
+			name:     "久坐语气枚举",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitTone",
+			goPrefix: "Tone",
+		},
+		{
+			name:     "久坐类别枚举",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitCategory",
+			goPrefix: "Category",
+		},
+		{
+			name:     "久坐气泡类型",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "BubbleKind",
+			goPrefix: "Bubble",
+		},
+		{
+			name:     "久坐动作 ID",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitAction",
+			goPrefix: "Action",
+		},
+		{
+			name:     "久坐结束原因",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitEndReason",
+			goPrefix: "EndReason",
+		},
+		{
+			name:     "久坐休息类型",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitBreakKind",
+			goPrefix: "BreakKind",
+		},
+		{
+			name:     "画像状态",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "ProfileStatus",
+			goPrefix: "ProfileStatus",
+		},
 	}
 
 	root := projectRoot()

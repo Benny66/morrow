@@ -12,6 +12,7 @@ const menuItems = [
   { path: '/', label: '仪表盘', icon: '◈' },
   { path: '/scenarios', label: '场景', icon: '◇' },
   { path: '/plan', label: '计划', icon: '≡' },
+  { path: '/sit', label: '久坐', icon: '◷' },
   { path: '/settings', label: '设置', icon: '⚙' },
   // gen:menu
 ]

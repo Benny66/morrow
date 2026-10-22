@@ -1,9 +1,12 @@
 <script lang="ts" setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { useAppStore } from '../stores/app'
 // v3 的绑定路径见 stores/app.ts 的说明。
 import {
+  ClearSitProfile,
   Confirm,
   ExportDatabase,
   GetAISettings,
@@ -18,6 +21,7 @@ import {
   GetPetSettings,
   GetPresentationShortcut,
   GetReminderSettings,
+  GetSitSettings,
   GetToggleWindowShortcut,
   ImportDatabase,
   ImportPetPack,
@@ -39,15 +43,20 @@ import {
   SetPetSettings,
   SetPresentationShortcut,
   SetReminderSettings,
+  SetSitProfileEnabled,
+  SetSitSettings,
   SetToggleWindowShortcut,
   TestAIConnection,
 } from '../../bindings/morrow/app.js'
+import { Tone as SitToneEnum } from '../../bindings/morrow/internal/sit/models.js'
+import { sitProfileStatusLabel } from '../lib/sit'
 import { invoke, type AppError } from '../lib/invoke'
 import { logError, logInfo, logWarn } from '../lib/log'
 
 // 设置页：主题三档 + 数据目录/备份恢复 + 通知/自启/快捷键/MCP token。
 // 演示三件事：响应式状态落盘、原生目录能力、绑定方法的组合调用（选路径 → 导出）。
 const store = useAppStore()
+const router = useRouter()
 // 用 storeToRefs 建立真响应式，避免 ref(store.theme) 的断链快照。
 const { theme, themeMode } = storeToRefs(store)
 
@@ -60,6 +69,8 @@ type AppInfo = Awaited<ReturnType<typeof GetAppInfo>>
 const info = ref<AppInfo | null>(null)
 const actionError = ref<AppError | null>(null)
 const exportHint = ref('')
+// 导出默认包含应用画像；取消后副本不含应用与久坐明细，CheckIn 保留。
+const exportIncludeSitProfile = ref(true)
 const copyHint = ref('')
 const notifyHint = ref('')
 const autostartState = ref<'unknown' | 'enabled' | 'disabled'>('unknown')
@@ -116,6 +127,24 @@ const petPackID = ref('builtin')
 const petHint = ref('')
 const petImporting = ref(false)
 
+// ---- 久坐感知 ----
+// 保留完整的 SitSettings 对象再改可写字段，避免把 profile_* 等未展示字段清零。
+type SitSettings = Awaited<ReturnType<typeof GetSitSettings>>
+const sitSettings = ref<SitSettings | null>(null)
+const sitEnabled = ref(true)
+const sitThreshold = ref(60)
+const sitTone = ref<SitSettings['tone']>(SitToneEnum.ToneSassy)
+const sitPlatformSupported = ref(true)
+const sitProfileEnabled = ref(false)
+const sitProfileStatus = ref('')
+const sitHint = ref('')
+const sitBusy = ref(false)
+const sitProfileStatusText = computed(() =>
+  sitProfileEnabled.value
+    ? sitProfileStatusLabel(sitProfileStatus.value || 'no_data')
+    : '基础模式',
+)
+
 // ---- 智能免打扰 ----
 const idleEnabled = ref(true)
 const lockEnabled = ref(true)
@@ -167,9 +196,11 @@ async function exportDatabase() {
   try {
     const target = await invoke(() => SelectSaveFile('导出数据库', defaultBackupName()))
     if (!target) return // 用户取消
-    await invoke(() => ExportDatabase(target))
-    exportHint.value = `已导出到 ${target}`
-    logInfo('数据库已导出', { target })
+    await invoke(() => ExportDatabase(target, exportIncludeSitProfile.value))
+    exportHint.value = exportIncludeSitProfile.value
+      ? `已导出到 ${target}（含应用与久坐明细）`
+      : `已导出到 ${target}（不含应用与久坐明细）`
+    logInfo('数据库已导出', { target, include_sit_profile: exportIncludeSitProfile.value })
   } catch (e) {
     actionError.value = e as AppError
   }
@@ -687,6 +718,120 @@ async function savePauseSettings() {
   }
 }
 
+// ---- 久坐感知 ----
+
+async function refreshSitSettings(): Promise<void> {
+  try {
+    const current = await invoke(() => GetSitSettings(), 'GetSitSettings')
+    sitSettings.value = current
+    sitEnabled.value = current.enabled
+    sitThreshold.value = current.threshold_minutes
+    sitTone.value = current.tone
+    sitPlatformSupported.value = current.platform_supported
+    sitProfileEnabled.value = current.profile_enabled
+    sitProfileStatus.value = current.profile_status
+  } catch (e) {
+    actionError.value = e as AppError
+  }
+}
+
+async function onSitProfileToggle(enabled: boolean): Promise<void> {
+  if (sitBusy.value) {
+    sitProfileEnabled.value = !enabled
+    return
+  }
+  sitBusy.value = true
+  sitHint.value = ''
+  try {
+    if (enabled) {
+      await invoke(() => SetSitProfileEnabled(true, false), 'SetSitProfileEnabled')
+      sitHint.value = '应用画像已开启'
+    } else {
+      let deleteHistory = false
+      try {
+        await ElMessageBox.confirm('关闭后立即停止记录。历史记录怎么处理？', '关闭应用画像', {
+          confirmButtonText: '保留历史',
+          cancelButtonText: '同时删除',
+          distinguishCancelAndClose: true,
+          type: 'warning',
+        })
+      } catch (action) {
+        if (action === 'cancel') {
+          deleteHistory = true
+        } else {
+          sitProfileEnabled.value = true
+          return
+        }
+      }
+      await invoke(
+        () => SetSitProfileEnabled(false, deleteHistory),
+        'SetSitProfileEnabled',
+      )
+      sitHint.value = deleteHistory ? '已关闭并删除应用画像历史' : '已关闭，历史保留'
+    }
+    await refreshSitSettings()
+  } catch (e) {
+    actionError.value = e as AppError
+    await refreshSitSettings()
+  } finally {
+    sitBusy.value = false
+  }
+}
+
+async function saveSitSettings(): Promise<void> {
+  if (sitBusy.value) return
+  if (!sitSettings.value) {
+    await refreshSitSettings()
+  }
+  const current = sitSettings.value
+  if (!current) return
+  sitBusy.value = true
+  sitHint.value = ''
+  try {
+    const next = {
+      ...current,
+      enabled: sitEnabled.value,
+      threshold_minutes: sitThreshold.value,
+      tone: sitTone.value,
+    }
+    await invoke(() => SetSitSettings(next), 'SetSitSettings')
+    sitSettings.value = next
+    sitHint.value = '已保存并生效'
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    sitBusy.value = false
+  }
+}
+
+async function clearSitProfileData(): Promise<void> {
+  if (sitBusy.value) return
+  sitHint.value = ''
+  try {
+    const ok = await invoke(
+      () =>
+        Confirm(
+          '清空应用与久坐数据',
+          '会删除应用会话、类别纠正、久坐会话、休息与宠物发言；已计入目标的打卡记录与连续天数保留。确定吗？',
+        ),
+      'Confirm',
+    )
+    if (!ok) return
+    sitBusy.value = true
+    await invoke(() => ClearSitProfile(), 'ClearSitProfile')
+    sitHint.value = '已清空应用与久坐数据；画像开启时会继续记录新数据，打卡记录保留'
+    await refreshSitSettings()
+  } catch (e) {
+    actionError.value = e as AppError
+  } finally {
+    sitBusy.value = false
+  }
+}
+
+function openSitPage(): void {
+  void router.push('/sit')
+}
+
 // 双保险：AppInfo 已含数据目录，若它整条拿不到（极端情况），退回单独查。
 // 顺带拉起各设置项的初始状态。
 onMounted(async () => {
@@ -724,6 +869,7 @@ onMounted(async () => {
   await refreshUninterruptedState()
   await refreshPet()
   await refreshPauseSettings()
+  await refreshSitSettings()
   // 从系统设置切回来时刷新权限状态（见 onWindowFocus 的说明）。
   window.addEventListener('focus', onWindowFocus)
 })
@@ -779,6 +925,14 @@ onUnmounted(() => {
     <div class="setting">
       <span class="setting__label">日志文件</span>
       <span class="setting__path" :title="info?.log_file">{{ info?.log_file || '—' }}</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">导出选项</span>
+      <el-checkbox v-model="exportIncludeSitProfile">包含应用使用明细（应用名与时长）</el-checkbox>
+      <span class="setting__muted">
+        默认包含；分享给他人前请取消。取消后备份不含应用与久坐明细，打卡记录与连续天数保留。
+      </span>
     </div>
 
     <div class="setting">
@@ -1160,6 +1314,79 @@ onUnmounted(() => {
       素材可从 codexpet.top 下载（pet.json + spritesheet.webp）后点「导入宠物包」；
       若你已在 Codex 客户端装过宠物，这里会自动列出 ~/.codex/pets 下的素材，无需导入。
     </p>
+
+    <h2 class="setting__section">久坐感知</h2>
+
+    <p class="setting__note">
+      用本机键鼠活跃度估算「连续用机」；只在当前场景含站立/走动提醒时启动。软提醒走桌面宠物气泡，
+      不发系统通知、不进待处理；数据只存本机，不上传。
+      {{ sitProfileEnabled ? '当前为应用画像模式，读取前台应用名称与使用时长。' : '当前为基础模式，不读取应用名称。' }}
+    </p>
+
+    <div class="setting">
+      <span class="setting__label">总开关</span>
+      <el-switch v-model="sitEnabled" />
+      <span class="setting__muted">关闭后不再检测久坐；正式提醒不受影响</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">久坐阈值</span>
+      <el-select v-model="sitThreshold" class="setting__select" size="small">
+        <el-option :value="45" label="45 分钟" />
+        <el-option :value="60" label="60 分钟" />
+        <el-option :value="90" label="90 分钟" />
+      </el-select>
+      <span class="setting__muted">连续用机多久后由宠物冒泡（临近正式站立/走动提醒时不冒）</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">宠物语气</span>
+      <el-select v-model="sitTone" class="setting__select" size="small">
+        <el-option :value="SitToneEnum.ToneSassy" label="毒舌" />
+        <el-option :value="SitToneEnum.ToneLively" label="活泼" />
+        <el-option :value="SitToneEnum.ToneGentle" label="温和" />
+      </el-select>
+      <span class="setting__muted">默认毒舌；气泡里的「别这样说」也会切到温和</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">应用使用画像</span>
+      <el-switch
+        v-model="sitProfileEnabled"
+        :disabled="!sitPlatformSupported || sitBusy"
+        @change="onSitProfileToggle"
+      />
+      <el-tag size="small" type="info">{{ sitProfileStatusText }}</el-tag>
+      <span class="setting__muted">
+        记录应用名、起止时间、时长与类别；只存本机，不读窗口标题/屏幕内容；关闭时可选择保留或删除历史。
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">平台能力</span>
+      <el-tag :type="sitPlatformSupported ? 'success' : 'info'" size="small">
+        {{ sitPlatformSupported ? '支持' : '当前平台不支持' }}
+      </el-tag>
+      <span class="setting__muted">
+        {{ sitPlatformSupported ? '可读取本机空闲/锁屏；部分受限终端（尤其 Windows）可能只能读空闲' : '久坐感知不启动；正式提醒仍然可用' }}
+      </span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label"></span>
+      <button class="setting__btn" @click="openSitPage">打开久坐页</button>
+      <button class="setting__btn" :disabled="sitBusy" @click="clearSitProfileData">
+        清空应用与久坐数据…
+      </button>
+      <span v-if="sitHint" class="setting__muted">{{ sitHint }}</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label"></span>
+      <button class="setting__btn" :disabled="sitBusy" @click="saveSitSettings">
+        {{ sitBusy ? '保存中…' : '保存久坐设置' }}
+      </button>
+    </div>
 
     <p v-if="actionError" class="setting__error">[{{ actionError.code }}] {{ actionError.message }}</p>
   </section>

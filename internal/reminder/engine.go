@@ -41,6 +41,8 @@ type Options struct {
 	// RestMode 休息模式状态机；nil 表示禁用休息模式（所有 kind 走简单提醒）。
 	// 只有 stand/move/rest 三类会尝试进入；其余 kind 不受影响（见 dispatch 分支）。
 	RestMode *restmode.Machine
+	// BreakProvider 久坐休息信号；nil 表示不跳过任何触发点。
+	BreakProvider BreakProvider
 }
 
 // Engine 是本地提醒调度引擎。
@@ -58,6 +60,7 @@ type Engine struct {
 	pauseProvider pause.Provider
 	activity      ActivityProvider
 	restMode      *restmode.Machine
+	breakProvider BreakProvider
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -88,6 +91,7 @@ func NewEngine(opts Options) *Engine {
 		pauseProvider:   opts.PauseProvider,
 		activity:        opts.Activity,
 		restMode:        opts.RestMode,
+		breakProvider:   opts.BreakProvider,
 		claimed:         map[uint]map[int64]bool{},
 		gridDeferrals:   map[uint]deferral{},
 		snoozeDeferrals: map[uint]deferral{},
@@ -147,6 +151,27 @@ func (e *Engine) SwapProvider(p pause.Provider) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.pauseProvider = p
+}
+
+// SetBreakProvider 注入/替换久坐休息信号（启动后由组合根设置）。
+func (e *Engine) SetBreakProvider(p BreakProvider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.breakProvider = p
+}
+
+// shouldSkipStandMove 只对 stand/move 询问 BreakProvider。
+func (e *Engine) shouldSkipStandMove(item model.Reminder, fireAt int64, now time.Time) bool {
+	if item.Kind != model.KindStand && item.Kind != model.KindMove {
+		return false
+	}
+	e.mu.Lock()
+	provider := e.breakProvider
+	e.mu.Unlock()
+	if provider == nil {
+		return false
+	}
+	return provider.ShouldSkipStandMove(item.ID, fireAt, now)
 }
 
 // loop 是调度循环。
@@ -508,6 +533,16 @@ func (e *Engine) tickGridReminder(
 	}
 	// 每日单点在暂停期已经在 claim 时落 missed；不投递、不广播 fired。
 	if paused && isDaily {
+		return
+	}
+	// 真实休息后短时间内到点的 stand/move：落 FireSilent，不投递、不算错过。
+	if e.shouldSkipStandMove(item, latest.fireAt, now) {
+		if settleErr := e.store.SettleFire(latest.fireID, model.FireSilent, now.Unix()); settleErr != nil {
+			slog.Warn("休息后静默跳过失败", "fire_id", latest.fireID, "err", settleErr)
+			return
+		}
+		slog.Info("休息后静默跳过提醒",
+			"reminder", item.Title, "fire_at", latest.fireAt)
 		return
 	}
 	e.dispatch(DueFire{

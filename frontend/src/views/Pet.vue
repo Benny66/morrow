@@ -13,6 +13,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Window } from '@wailsio/runtime'
 import {
+  AckSitBubble,
   CollapsePet,
   CompleteReminder,
   DismissPresentationSuggestion,
@@ -23,18 +24,30 @@ import {
   GetPetSettings,
   GetPetSprite,
   GetRestModeSnapshot,
+  GetSitSnapshot,
   ListPendingFires,
+  MuteSitToday,
   OpenMainWindow,
   SetPetBubbleHeight,
   SetPetBubbleVisible,
   SetPresentationMode,
+  SetSitTone,
   SnoozeReminder,
+  SnoozeSitNudge,
+  TakeActiveBreak,
 } from '../../bindings/morrow/app.js'
 import { invoke } from '../lib/invoke'
 import { useEvent } from '../composables/useEvent'
 import { ReminderEvent, type ReminderFiredPayload } from '../lib/reminder'
 import { State as RestModeState, type Snapshot as RestModeSnapshot } from '../../bindings/morrow/internal/restmode/models.js'
 import { logInfo, logWarn } from '../lib/log'
+import { SitAction, sitActionLabel, sitMoodClass } from '../lib/sit'
+import {
+  ActionID,
+  BubbleKind as SitBubbleKindEnum,
+  State as SitStateEnum,
+  Tone as SitToneEnum,
+} from '../../bindings/morrow/internal/sit/models.js'
 import {
   FRAME_H,
   FRAME_W,
@@ -63,6 +76,10 @@ import {
 
 /** 待处理提醒（用绑定返回类型反推，不手写镜像——Go 侧一改这里立刻跟着变）。 */
 type PendingFire = NonNullable<Awaited<ReturnType<typeof ListPendingFires>>>[number]
+
+/** 久坐快照/气泡同样用绑定返回类型反推，避免前端手写第二份快照。 */
+type SitSnapshotData = Awaited<ReturnType<typeof GetSitSnapshot>>
+type SitBubbleData = NonNullable<SitSnapshotData['bubble']>
 
 // ---- 渲染状态 ----
 
@@ -106,6 +123,34 @@ const deferring = ref(false)
  *   - 其他（idle/done/skipped）：宠物不介入，走原有 pending 通道
  */
 const restSnap = ref<RestModeSnapshot | null>(null)
+
+// ---- 久坐感知状态 ----
+
+/** 宠物窗口 4 秒轮询的久坐快照；null 表示尚未拉到。 */
+const sitSnapshot = ref<SitSnapshotData | null>(null)
+/**
+ * 已确认展示的气泡本地钉住到 TTL 结束。
+ *
+ * 后端 Ack 语义是“已展示”，不是“已处理”；Ack 后 PendingSitSpeech 不再返回它。
+ * 若只依赖轮询，气泡会在 4 秒后被下一轮空快照抹掉，用户来不及点「更多」。
+ */
+const pinnedSitBubble = ref<SitBubbleData | null>(null)
+/** 当前待展示的久坐/欢迎气泡：优先服务端新气泡，否则保留本地钉住的一条。 */
+const sitBubble = computed<SitBubbleData | null>(() => sitSnapshot.value?.bubble ?? pinnedSitBubble.value)
+/** 主按钮（去掉 more；more 单独渲染成展开入口）。 */
+const sitMainActions = computed(() =>
+  (sitBubble.value?.actions ?? []).filter((action) => action !== ActionID.ActionMore),
+)
+/** 当前气泡是否带「更多」入口。 */
+const sitHasMore = computed(() => (sitBubble.value?.actions ?? []).includes(ActionID.ActionMore))
+/** 温和语气下不再提供「别这样说」。 */
+const sitCanGentle = computed(() => (sitSnapshot.value?.tone ?? SitToneEnum.ToneSassy) !== SitToneEnum.ToneGentle)
+/** 「更多」第二行是否展开。 */
+const sitMoreOpen = ref(false)
+/** 久坐动作在途，防重复点击。 */
+const sitBusy = ref(false)
+/** 已确认展示的久坐气泡 ID；避免 4 秒轮询重复 Ack。 */
+let ackedSitBubbleID = ''
 
 // ---- 气泡状态 ----
 
@@ -406,6 +451,41 @@ const restAccompanyingText = computed(() => {
   return `陪你休息 ${pad(m)}:${pad(sec)}`
 })
 
+/**
+ * 久坐气泡是否可见：排在所有既有气泡之后，且贴边收起/静音当天不显示。
+ *
+ * 它是「正式提醒永远优先」的最后一道保险：即使后端已经生成了待展示气泡，
+ * 只要有更高优先级内容，前端就不渲染、也不 Ack（避免没看见却消耗预算）。
+ */
+const sitBubbleVisible = computed(
+  () =>
+    sitBubble.value !== null &&
+    !restAccompanying.value &&
+    !restWarningVisible.value &&
+    !deferringBubbleVisible.value &&
+    !presentationSuggestionVisible.value &&
+    !pauseBubbleVisible.value &&
+    !bubbleVisible.value &&
+    dockSide.value === '' &&
+    // 「今天先这样」只压软提醒/记忆；动作确认与欢迎回来仍可见。
+    (!sitSnapshot.value?.muted_today ||
+      sitBubble.value?.kind === SitBubbleKindEnum.BubbleGreeting),
+)
+
+/** 情绪只在待机时露出来；等待/庆祝/休息陪做优先。 */
+const sitMoodVisible = computed(
+  () =>
+    anim.value === PetAnim.Idle &&
+    sitSnapshot.value?.state === SitStateEnum.StateTracking &&
+    !sitSnapshot.value?.muted_today &&
+    !restAccompanying.value &&
+    !restWarningVisible.value,
+)
+
+const sitMoodClassValue = computed(() =>
+  sitMoodVisible.value ? sitMoodClass(sitSnapshot.value?.mood) : '',
+)
+
 /** 暂停气泡的文案：根据暂停原因显示不同的提示。 */
 const pauseBubbleText = computed(() => {
   if (!paused.value) return ''
@@ -684,6 +764,124 @@ async function syncRestModeState(): Promise<void> {
     logWarn('读取休息模式快照失败', { err: String(e) })
   }
 }
+
+/** 拉取久坐快照；失败保持上一轮，避免气泡突然消失。 */
+async function syncSitState(): Promise<void> {
+  try {
+    sitSnapshot.value = await invoke(() => GetSitSnapshot(), 'GetSitSnapshot')
+    const bubble = sitSnapshot.value?.bubble
+    if (bubble) {
+      pinnedSitBubble.value = bubble
+    } else if (pinnedSitBubble.value && pinnedSitBubble.value.expires_at * 1000 <= Date.now()) {
+      pinnedSitBubble.value = null
+    }
+  } catch (e) {
+    logWarn('读取久坐状态失败', { err: String(e) })
+  }
+}
+
+/** 本地收起当前久坐气泡，等下一次轮询以服务端为准。 */
+function clearSitBubble(): void {
+  pinnedSitBubble.value = null
+  if (sitSnapshot.value?.bubble) {
+    sitSnapshot.value = { ...sitSnapshot.value, bubble: undefined }
+  }
+  sitMoreOpen.value = false
+}
+
+/** 立即确认当前气泡已被展示；幂等，失败只记日志。 */
+async function ackSitBubbleNow(id: string): Promise<void> {
+  if (!id || id === ackedSitBubbleID) return
+  ackedSitBubbleID = id
+  try {
+    await invoke(() => AckSitBubble(id), 'AckSitBubble')
+  } catch (e) {
+    logWarn('确认久坐气泡失败', { err: String(e) })
+  }
+}
+
+/** 久坐气泡动作分发：只按后端给的 action ID 走，不在前端猜业务。 */
+async function onSitAction(action: string): Promise<void> {
+  const bubble = sitBubble.value
+  if (!bubble || sitBusy.value) return
+  if (action === SitAction.More) {
+    sitMoreOpen.value = !sitMoreOpen.value
+    return
+  }
+  if (action === SitAction.OpenApp) {
+    openMainWindow()
+    return
+  }
+  if (action === SitAction.Dismiss) {
+    await ackSitBubbleNow(bubble.id)
+    clearSitBubble()
+    return
+  }
+
+  sitBusy.value = true
+  try {
+    if (action === SitAction.StartBreak) {
+      await invoke(() => TakeActiveBreak(bubble.id), 'TakeActiveBreak')
+    } else if (action === SitAction.Snooze10) {
+      await invoke(() => SnoozeSitNudge(bubble.id), 'SnoozeSitNudge')
+    }
+    clearSitBubble()
+    await syncSitState()
+  } catch (e) {
+    logWarn('处理久坐气泡失败', { action, err: String(e) })
+    await syncSitState()
+  } finally {
+    sitBusy.value = false
+  }
+}
+
+/** 「今天先这样」：只看今天，正式提醒不受影响。 */
+async function onSitMuteToday(): Promise<void> {
+  if (sitBusy.value) return
+  sitBusy.value = true
+  try {
+    await invoke(() => MuteSitToday(), 'MuteSitToday')
+    // 后端会紧接着创建静音确认气泡；不要先清本地，避免轮询先 Ack 后把它抹掉。
+    await syncSitState()
+  } catch (e) {
+    logWarn('静音今日久坐失败', { err: String(e) })
+  } finally {
+    sitBusy.value = false
+  }
+}
+
+/** 「别这样说」：切到温和语气并持久化。 */
+async function onSitGentle(): Promise<void> {
+  if (sitBusy.value) return
+  sitBusy.value = true
+  try {
+    await invoke(() => SetSitTone(String(SitToneEnum.ToneGentle)), 'SetSitTone')
+    // 后端会创建温和确认气泡；交给 sync 替换，避免清掉刚渲染的确认。
+    await syncSitState()
+  } catch (e) {
+    logWarn('切换宠物语气失败', { err: String(e) })
+  } finally {
+    sitBusy.value = false
+  }
+}
+
+// 久坐气泡真正出现时才 Ack；贴边/被更高优先级气泡挡住时不消耗预算。
+watch(
+  [sitBubbleVisible, () => sitBubble.value?.id ?? ''],
+  ([visible, id]) => {
+    if (!visible || !id || id === ackedSitBubbleID) return
+    void ackSitBubbleNow(id)
+  },
+  { flush: 'post' },
+)
+
+// 换了一条气泡就收起「更多」第二行，避免把上一条的菜单带到下一条。
+watch(
+  () => sitBubble.value?.id ?? '',
+  () => {
+    sitMoreOpen.value = false
+  },
+)
 
 /** reminder:changed 的处理：只有"刚才有、现在没有"才庆祝。 */
 async function handleChanged(): Promise<void> {
@@ -971,6 +1169,7 @@ async function pollSettings(): Promise<void> {
   await syncGrowth()
   await syncInterruptionState()
   await syncRestModeState()
+  await syncSitState()
   // 4 秒一次的兜底：原生窗口显隐、引擎差异都可能让观察器漏事件。
   // 有气泡时重报一次；Go 侧对相同尺寸是幂等的，不会反复 resize。
   if (bubbleRef.value) void applyBubbleFit()
@@ -1008,6 +1207,7 @@ onMounted(async () => {
 
   await refreshPending()
   await syncGrowth()
+  await syncSitState()
   logInfo('宠物窗口已就绪', { pack: packID.value, mode: mode.value, scale: scale.value })
 
   pollTimer = window.setInterval(() => {
@@ -1045,7 +1245,12 @@ onUnmounted(() => {
 <template>
   <div
     class="pet"
-    :class="[`pet--${anim}`, growthStageClass(growth), dockSide ? `pet--dock-${dockSide}` : '']"
+    :class="[
+      `pet--${anim}`,
+      growthStageClass(growth),
+      sitMoodClassValue,
+      dockSide ? `pet--dock-${dockSide}` : '',
+    ]"
     @mouseenter="onPetEnter"
     @mouseleave="onPetLeave"
   >
@@ -1117,6 +1322,44 @@ onUnmounted(() => {
       <span class="bubble__hint" @click="openMainWindow">打开客户端</span>
     </div>
 
+    <!-- 久坐软提醒/欢迎气泡：排在所有既有气泡之后，最低优先级。
+         动作只按后端给的 action ID 分发；更多菜单在气泡内展开，避免小窗裁切。 -->
+    <div v-else-if="sitBubbleVisible && sitBubble" ref="bubbleRef" class="bubble bubble--sit">
+      <p class="bubble__title">{{ sitBubble.title }}</p>
+      <p v-if="sitBubble.text" class="bubble__text">{{ sitBubble.text }}</p>
+      <div class="bubble__actions">
+        <template v-for="action in sitMainActions" :key="action">
+          <button
+            class="bubble__btn"
+            :class="{ 'bubble__btn--primary': action === ActionID.ActionStartBreak }"
+            :disabled="sitBusy"
+            @click="onSitAction(action)"
+          >
+            {{ sitActionLabel(action) }}
+          </button>
+        </template>
+        <button
+          v-if="sitHasMore"
+          class="bubble__btn"
+          :disabled="sitBusy"
+          @click="onSitAction(ActionID.ActionMore)"
+        >
+          更多
+        </button>
+      </div>
+      <div v-if="sitMoreOpen" class="bubble__actions bubble__actions--secondary">
+        <button class="bubble__btn" :disabled="sitBusy" @click="onSitMuteToday">
+          今天先这样
+        </button>
+        <button v-if="sitCanGentle" class="bubble__btn" :disabled="sitBusy" @click="onSitGentle">
+          别这样说
+        </button>
+        <button class="bubble__btn" :disabled="sitBusy" @click="openMainWindow">
+          打开客户端
+        </button>
+      </div>
+    </div>
+
     <!-- 宠物本体：整块是拖拽区（窗口无边框，拖它就是移动窗口的方式）。
          用 mousedown 而不是 click 起手势：click 与拖拽共用同一串鼠标事件，
          谁先谁后由 wails 的拖拽逻辑决定，靠它判「点击」是不可靠的。
@@ -1166,9 +1409,13 @@ onUnmounted(() => {
             <!-- 生长档位的静态形态层：整体 scale 与叶 rotate 作用在这一层，
                  与动态层 .pet__sprout（sway/alert/pop 的 rotate）是不同元素，互不覆盖。 -->
             <g class="pet__sprout-body">
-              <path class="pet__stem" d="M96 46V20" />
-              <path class="pet__leaf pet__leaf--left" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
-              <path class="pet__leaf pet__leaf--right" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+              <!-- 情绪层：久坐担心/耷拉。与生长档位（父层 scale）分开，
+                   避免两个 transform 互相覆盖。 -->
+              <g class="pet__sprout-mood">
+                <path class="pet__stem" d="M96 46V20" />
+                <path class="pet__leaf pet__leaf--left" d="M96 30C87 29 74 22 72 12 84 11 94 19 96 30Z" />
+                <path class="pet__leaf pet__leaf--right" d="M96 24C105 23 118 16 120 8 108 7 98 14 96 24Z" />
+              </g>
             </g>
           </g>
         </g>
@@ -1250,6 +1497,26 @@ onUnmounted(() => {
 
 .bubble--suggestion::after {
   background: var(--color-primary-soft);
+}
+
+/* 久坐软提醒/欢迎气泡：最低优先级，仍用品牌软色，避免像错误提示。 */
+.bubble--sit {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-300);
+}
+
+.bubble--sit::after {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-300);
+}
+
+/* 「更多」第二行：三个入口在 240px 宽气泡里换行，避免把按钮压成一条线。 */
+.bubble__actions--secondary {
+  flex-wrap: wrap;
+}
+
+.bubble__actions--secondary .bubble__btn {
+  flex: 1 1 30%;
 }
 
 /* 陪做气泡（Countdown）：与休息模式覆盖层同色系（品牌主色），文字用 tabular-nums
@@ -1557,6 +1824,22 @@ onUnmounted(() => {
   transition: transform 300ms var(--ease-in-out);
 }
 
+/* 久坐情绪层：在生长档位内部再做旋转/压扁，避免覆盖生长 scale。
+   芽是头顶的情绪指示器；担心时轻微偏，耷拉时明显低头。 */
+.pet__sprout-mood {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform 300ms var(--ease-in-out);
+}
+
+.pet--sit-concerned .pet__sprout-mood {
+  transform: rotate(7deg) scaleY(0.96);
+}
+
+.pet--sit-droopy .pet__sprout-mood {
+  transform: rotate(15deg) scaleY(0.84);
+}
+
 /* ---- 芽随今日完成率生长：五档 ----
    「叶展开角」负=内收、正=展开；左右两叶互为镜像：
    左叶正角=内收/负角=展开，右叶相反。整体 scale 见下表。
@@ -1670,6 +1953,11 @@ onUnmounted(() => {
   .pet__eyes-open,
   .pet--waiting .pet__sprout {
     animation: none;
+  }
+
+  /* 情绪是静态状态，不是事件反馈；减弱动态时直接切换，不做过渡。 */
+  .pet__sprout-mood {
+    transition: none;
   }
 }
 

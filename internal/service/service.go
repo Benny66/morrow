@@ -27,6 +27,10 @@ type Service struct {
 	// 只在内存中：重启后旧的安静投递会按普通待处理展示——这是 B-11 的已知取舍。
 	quietMu    sync.Mutex
 	quietFires map[uint]bool
+
+	// sitCreditMu 串行化久坐目标抵扣；active break 与解锁记账可能并发，
+	// 同一久坐会话只允许一次抵扣。
+	sitCreditMu sync.Mutex
 }
 
 // New 创建服务聚合，注入数据库连接。

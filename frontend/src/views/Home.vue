@@ -10,14 +10,17 @@ import {
   CreateReminders,
   DeleteReminder,
   GenerateQuickAddDrafts,
+  GetSitSettings,
   ListMissedToday,
   ListOneOffs,
   ListScenarios,
   SelectFile,
+  SetSitProfileEnabled,
   UpdateReminder,
 } from '../../bindings/morrow/app.js'
 import { invoke, type AppError } from '../lib/invoke'
 import { EventAction, eventName } from '../lib/event'
+import { logInfo, logWarn } from '../lib/log'
 import {
   MAX_ATTACHMENTS,
   MAX_IMAGE_BYTES,
@@ -37,6 +40,36 @@ import {
 // 数据全部来自一次 GetTodayStats 聚合调用（见 service.TodayStats 的注释）；
 // 一次性列表是独立查询（不受当前场景影响）。
 const store = useReminderStore()
+
+// ---- 升级用户的久坐画像同意卡 ----
+// 干净安装走 Welcome 第 4 步；已完成引导的升级用户没有问过，就在首页补一次。
+const sitConsentVisible = ref(false)
+const sitConsentBusy = ref(false)
+const sitConsentError = ref<AppError | null>(null)
+
+async function loadSitConsent(): Promise<void> {
+  try {
+    const settings = await invoke(() => GetSitSettings(), 'GetSitSettings')
+    sitConsentVisible.value = !settings.profile_asked
+  } catch (e) {
+    logWarn('读取久坐画像同意状态失败', { err: String(e) })
+  }
+}
+
+async function resolveSitConsent(enabled: boolean): Promise<void> {
+  if (sitConsentBusy.value) return
+  sitConsentBusy.value = true
+  sitConsentError.value = null
+  try {
+    await invoke(() => SetSitProfileEnabled(enabled, false), 'SetSitProfileEnabled')
+    sitConsentVisible.value = false
+    logInfo('久坐应用画像同意已记录', { enabled })
+  } catch (e) {
+    sitConsentError.value = e as AppError
+  } finally {
+    sitConsentBusy.value = false
+  }
+}
 
 /** 一次性提醒行（用绑定返回类型反推，不手写镜像）。 */
 type OneOffRow = NonNullable<Awaited<ReturnType<typeof ListOneOffs>>>[number]
@@ -140,6 +173,7 @@ onMounted(() => {
   void loadOneOffs()
   void loadMissedToday()
   void loadScenarios()
+  void loadSitConsent()
   ticker = window.setInterval(() => {
     nowMs.value = Date.now()
   }, 1000)
@@ -680,6 +714,30 @@ function progressPercent(done: number, target: number): number {
       [{{ store.error.code }}] {{ store.error.message }}
     </p>
 
+    <el-card v-if="sitConsentVisible" class="sit-consent" shadow="never">
+      <div class="sit-consent__copy">
+        <h2 class="sit-consent__title">让小满知道你在用什么？</h2>
+        <p class="sit-consent__desc">
+          开启后会记录前台应用名、起止时间、使用时长与行为类别；只存本机，不上传，
+          不读窗口标题、屏幕内容或键鼠输入内容。可以随时在设置里关闭、查看或清空。
+        </p>
+        <p class="sit-consent__note">
+          小满默认说话比较直（毒舌），可随时切换；选择基础检测也能继续久坐提醒，只是不读应用名。
+        </p>
+      </div>
+      <div class="sit-consent__actions">
+        <el-button :loading="sitConsentBusy" @click="resolveSitConsent(false)">
+          只使用基础检测
+        </el-button>
+        <el-button type="primary" :loading="sitConsentBusy" @click="resolveSitConsent(true)">
+          开启应用画像
+        </el-button>
+      </div>
+      <p v-if="sitConsentError" class="page__error" @click="sitConsentError = null">
+        [{{ sitConsentError.code }}] {{ sitConsentError.message }}
+      </p>
+    </el-card>
+
     <el-card class="quick" shadow="never">
       <div class="quick__drop" @paste="onAiPaste" @dragover.prevent @drop.prevent="onAiDrop">
         <div class="quick__head">
@@ -1183,6 +1241,38 @@ function progressPercent(done: number, target: number): number {
 }
 
 /* ---- 快速添加（一次性提醒） ---- */
+.sit-consent {
+  margin-bottom: var(--space-4);
+  border-color: var(--color-primary-300);
+  background: var(--color-primary-soft);
+}
+
+.sit-consent__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-md);
+}
+
+.sit-consent__desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--font-size-sm);
+  line-height: 1.7;
+}
+
+.sit-consent__note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-3);
+  font-size: var(--font-size-xs);
+  line-height: 1.7;
+}
+
+.sit-consent__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
 .quick {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);

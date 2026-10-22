@@ -16,6 +16,10 @@ package pause
 // IOKit 的 IOPMMessage 能拿到休眠/唤醒，但拿不到「屏幕被锁定」。
 // 轮询是唯一跨版本稳定的实现，且开销可控（1 秒一次、单次几微秒）。
 //
+// 【为什么同时接受 CFBoolean 与 CFNumber】macOS 26 上该值是 CFBoolean，
+// 旧实现只认 CFNumber，类型检查失败后静默当成「未锁屏」——锁屏期间采样与
+// 计时继续，且没有任何报错。两种类型都必须解析。
+//
 // 【为什么 extern 声明返回 CFDictionaryRef】CGSessionCopyCurrentDictionary 在
 // 10.15+ 的 SDK 里声明在 CGSession.h（随 CoreGraphics 提供），但 Go 的 cgo
 // 预编译单元不自动 import 该头文件；手写 extern 时返回类型必须与真实签名一致
@@ -29,10 +33,16 @@ static int isScreenLocked() {
     }
     CFTypeRef v = CFDictionaryGetValue(d, CFSTR("CGSSessionScreenIsLocked"));
     int locked = 0;
-    if (v != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) {
-        int n = 0;
-        CFNumberGetValue((CFNumberRef)v, kCFNumberSInt32Type, &n);
-        locked = n;
+    if (v != NULL) {
+        CFTypeID type = CFGetTypeID(v);
+        if (type == CFBooleanGetTypeID()) {
+            locked = CFBooleanGetValue((CFBooleanRef)v) ? 1 : 0;
+        } else if (type == CFNumberGetTypeID()) {
+            int n = 0;
+            if (CFNumberGetValue((CFNumberRef)v, kCFNumberSInt32Type, &n)) {
+                locked = n != 0;
+            }
+        }
     }
     CFRelease(d);
     return locked;
@@ -53,6 +63,9 @@ import (
 // 事件（合盖、系统 idle sleep）在恢复后 CGSSessionScreenIsLocked 会变回 0，
 // 我们的轮询会在下一 tick 检测到并清除暂停状态。
 func startLockWatcher(d *LockDetector) func() {
+	// 首轮同步读取：久坐运行时在启动后立即 tick，若等第一次 1 秒轮询，
+	// 锁屏启动会被短暂当成未锁屏，凭空生成一段久坐与锁屏休息。
+	d.SetLocked(C.isScreenLocked() != 0)
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {

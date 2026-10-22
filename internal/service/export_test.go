@@ -4,13 +4,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
 	"morrow/internal/appdir"
 	"morrow/internal/apperr"
+	"morrow/internal/model"
+	"morrow/internal/sit"
 )
 
 // exportProbe 仅用于导出测试，非业务模型。
@@ -52,7 +56,7 @@ func TestExportDatabaseProducesUsableCopy(t *testing.T) {
 	svc, _ := newExportTestService(t)
 
 	target := filepath.Join(t.TempDir(), "backup.db")
-	if err := svc.ExportDatabase("exporttest", target); err != nil {
+	if err := svc.ExportDatabase("exporttest", target, true); err != nil {
 		t.Fatalf("ExportDatabase 失败: %v", err)
 	}
 
@@ -70,6 +74,130 @@ func TestExportDatabaseProducesUsableCopy(t *testing.T) {
 	}
 }
 
+// TestExportDatabaseSitProfileOption 验证导出勾选：包含时保留画像，取消时
+// 副本没有画像/久坐表但 CheckIn 保留，且副本可重新迁移使用。
+func TestExportDatabaseSitProfileOption(t *testing.T) {
+	isolateHome(t)
+	svc := newReminderTestService(t)
+	now := time.Now()
+	dateKey := now.Format(model.DateLayout)
+
+	app, err := svc.StartAppUsageSession("darwin", "com.google.Chrome", now.Add(-10*time.Minute))
+	if err != nil {
+		t.Fatalf("StartAppUsageSession 失败: %v", err)
+	}
+	if err := svc.EndAppUsageSession(app.ID, string(sit.EndReasonAppSwitch), now.Add(-5*time.Minute)); err != nil {
+		t.Fatalf("EndAppUsageSession 失败: %v", err)
+	}
+	if err := svc.SetAppCategory("darwin", "com.google.Chrome", string(sit.CategoryMedia)); err != nil {
+		t.Fatalf("SetAppCategory 失败: %v", err)
+	}
+	session, err := svc.StartSitSession(now.Add(-30 * time.Minute))
+	if err != nil {
+		t.Fatalf("StartSitSession 失败: %v", err)
+	}
+	if _, err := svc.StartSitBreak(session.ID, now.Add(-20*time.Minute), string(sit.BreakKindActive), 60); err != nil {
+		t.Fatalf("StartSitBreak 失败: %v", err)
+	}
+	if _, err := svc.CreateSitSpeech(dateKey, session.ID, string(sit.BubbleNudge), "nudge.test", "", "坐久了", now, time.Minute); err != nil {
+		t.Fatalf("CreateSitSpeech 失败: %v", err)
+	}
+	if err := svc.db.Create(&model.CheckIn{
+		ReminderID: 1, ScenarioID: 1, Action: model.ActionDone, Source: model.SourceActiveBreak,
+		ActedAt: now.Unix(), DateKey: dateKey,
+	}).Error; err != nil {
+		t.Fatalf("写入 CheckIn 失败: %v", err)
+	}
+
+	openBackup := func(path string) (*gorm.DB, func()) {
+		t.Helper()
+		db, openErr := gorm.Open(sqlite.Open(path), &gorm.Config{})
+		if openErr != nil {
+			t.Fatalf("打开导出文件失败: %v", openErr)
+		}
+		sqlDB, sqlErr := db.DB()
+		if sqlErr != nil {
+			t.Fatalf("获取导出连接失败: %v", sqlErr)
+		}
+		return db, func() { _ = sqlDB.Close() }
+	}
+
+	withProfile := filepath.Join(t.TempDir(), "with-profile.db")
+	if err := svc.ExportDatabase("exporttest", withProfile, true); err != nil {
+		t.Fatalf("包含画像导出失败: %v", err)
+	}
+	full, closeFull := openBackup(withProfile)
+	for _, table := range []any{&model.AppUsageSession{}, &model.AppCategoryOverride{}, &model.SitSession{}, &model.SitBreak{}, &model.SitSpeech{}} {
+		if !full.Migrator().HasTable(table) {
+			t.Errorf("包含画像的副本缺少表 %T", table)
+		}
+	}
+	var appCount int64
+	if err := full.Model(&model.AppUsageSession{}).Count(&appCount).Error; err != nil {
+		t.Fatalf("统计应用会话失败: %v", err)
+	}
+	if appCount != 1 {
+		t.Errorf("包含画像的应用会话 = %d，期望 1", appCount)
+	}
+	closeFull()
+
+	withoutProfile := filepath.Join(t.TempDir(), "without-profile.db")
+	if err := svc.ExportDatabase("exporttest", withoutProfile, false); err != nil {
+		t.Fatalf("取消画像导出失败: %v", err)
+	}
+	trimmed, closeTrimmed := openBackup(withoutProfile)
+	for _, table := range []any{&model.AppUsageSession{}, &model.AppCategoryOverride{}, &model.SitSession{}, &model.SitBreak{}, &model.SitSpeech{}} {
+		if trimmed.Migrator().HasTable(table) {
+			t.Errorf("取消画像的副本不应包含表 %T", table)
+		}
+	}
+	var checks int64
+	if err := trimmed.Model(&model.CheckIn{}).Count(&checks).Error; err != nil {
+		t.Fatalf("统计 CheckIn 失败: %v", err)
+	}
+	if checks != 1 {
+		t.Errorf("取消画像后 CheckIn = %d，期望保留 1 条", checks)
+	}
+	// 恢复/迁移路径：重新建表后副本仍可用，打卡数据不丢。
+	if err := trimmed.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("导出副本重新迁移失败: %v", err)
+	}
+	for _, table := range []any{&model.AppUsageSession{}, &model.SitSession{}} {
+		if !trimmed.Migrator().HasTable(table) {
+			t.Errorf("重新迁移后缺少表 %T", table)
+		}
+	}
+	if err := trimmed.Model(&model.CheckIn{}).Count(&checks).Error; err != nil {
+		t.Fatalf("迁移后统计 CheckIn 失败: %v", err)
+	}
+	if checks != 1 {
+		t.Errorf("迁移后 CheckIn = %d，期望 1", checks)
+	}
+	closeTrimmed()
+
+	entries, readErr := os.ReadDir(filepath.Dir(withoutProfile))
+	if readErr != nil {
+		t.Fatalf("读取导出目录失败: %v", readErr)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(withoutProfile) {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Errorf("取消画像导出后目录内容 = %v，期望仅目标文件", names)
+	}
+
+	if runtime.GOOS != "windows" {
+		info, statErr := os.Stat(withoutProfile)
+		if statErr != nil {
+			t.Fatalf("读取导出文件权限失败: %v", statErr)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("导出文件权限 = %o，期望 600", got)
+		}
+	}
+}
+
 // TestExportDatabaseOverwritesExisting 目标已存在时 MUST 覆盖成功——
 // 用户在系统「保存」对话框里已经确认过覆盖，这里再报「文件已存在」是打自己的脸。
 func TestExportDatabaseOverwritesExisting(t *testing.T) {
@@ -80,7 +208,7 @@ func TestExportDatabaseOverwritesExisting(t *testing.T) {
 	if err := os.WriteFile(target, []byte("这是一个旧文件"), 0o644); err != nil {
 		t.Fatalf("准备旧文件失败: %v", err)
 	}
-	if err := svc.ExportDatabase("exporttest", target); err != nil {
+	if err := svc.ExportDatabase("exporttest", target, true); err != nil {
 		t.Fatalf("覆盖式导出失败: %v", err)
 	}
 
@@ -104,7 +232,7 @@ func TestExportDatabaseLeavesNoTempFile(t *testing.T) {
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "backup.db")
-	if err := svc.ExportDatabase("exporttest", target); err != nil {
+	if err := svc.ExportDatabase("exporttest", target, true); err != nil {
 		t.Fatalf("ExportDatabase 失败: %v", err)
 	}
 
@@ -138,7 +266,7 @@ func TestExportDatabaseRejectsTargetInsideDataDir(t *testing.T) {
 		filepath.Join(dataDir, "sub", "backup.db"),
 		dataDir,
 	} {
-		exportErr := svc.ExportDatabase("exporttest", target)
+		exportErr := svc.ExportDatabase("exporttest", target, true)
 		if exportErr == nil {
 			t.Errorf("导出到 %q 未被拒绝", target)
 			continue
@@ -156,7 +284,7 @@ func TestExportDatabaseRejectsEmptyTarget(t *testing.T) {
 	svc, _ := newExportTestService(t)
 
 	for _, target := range []string{"", "   "} {
-		if err := svc.ExportDatabase("exporttest", target); err == nil {
+		if err := svc.ExportDatabase("exporttest", target, true); err == nil {
 			t.Errorf("空路径 %q 未被拒绝", target)
 		}
 	}

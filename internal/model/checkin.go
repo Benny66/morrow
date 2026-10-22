@@ -18,6 +18,20 @@ const (
 	ActionSkip = "skip"
 )
 
+// 打卡来源（单一真相）。
+//
+// 用户从卡片/通知/宠物处理写 manual；久坐主动休息与锁屏抵扣分别写
+// active_break / lock_break。统计仍只看 action，不看 source；source 只用于
+// 久坐页区分「这次完成是怎么来的」，以及清空应用画像时不误伤手动打卡。
+const (
+	// SourceManual 用户在界面/通知上手动处理。
+	SourceManual = "manual"
+	// SourceActiveBreak 久坐主动休息抵扣。
+	SourceActiveBreak = "active_break"
+	// SourceLockBreak 锁屏休息抵扣。
+	SourceLockBreak = "lock_break"
+)
+
 // CheckIn 是一次用户动作的记录，是今日统计与连续达标天数的唯一数据源。
 //
 // 【为什么不直接数触发记录】触发记录只能回答「提醒响过几次」，回答不了
@@ -34,6 +48,9 @@ type CheckIn struct {
 
 	// Action 取值见上方 Action* 常量。
 	Action string `gorm:"size:16;not null" json:"action"`
+
+	// Source 取值见上方 Source* 常量；旧行由数据库默认值补成 manual。
+	Source string `gorm:"size:16;not null;default:'manual'" json:"source"`
 
 	// ScheduledAt 这次动作回应的是哪个计划时间点（Unix 秒）。
 	ScheduledAt int64 `gorm:"not null;default:0" json:"scheduled_at"`

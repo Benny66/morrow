@@ -4,10 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"morrow/internal/appdir"
 	"morrow/internal/apperr"
+	"morrow/internal/model"
 )
 
 // exportTempSuffix 导出中转文件的扩展名后缀。
@@ -16,13 +22,17 @@ const exportTempSuffix = ".exporting"
 
 // ExportDatabase 把当前数据库导出一份完整可用的副本到 target 路径。
 //
+// includeSitProfile=false 时，副本不包含应用画像/久坐相关表（应用会话、类别纠正、
+// 久坐会话/休息/宠物发言），但 CheckIn 与提醒数据原样保留。导出的文件在 POSIX
+// 平台收紧为仅当前用户可读。
+//
 // 实现要点（见 openspec/changes/runtime-pipeline/design.md D5）：
 //   - 用 SQLite 的 VACUUM INTO 生成一致性快照：不必停写、不必自己处理页锁与 WAL，
 //     产出的是一个可直接打开的完整库文件。
 //   - VACUUM INTO 要求目标文件【不存在】，但用户通常经系统「保存」对话框选路径，
 //     在那里已确认过覆盖。故先导出到同目录的临时文件，成功后原子改名覆盖目标。
 //   - 失败路径清理临时文件，不留垃圾。
-func (s *Service) ExportDatabase(appName, target string) (err error) {
+func (s *Service) ExportDatabase(appName, target string, includeSitProfile bool) (err error) {
 	if strings.TrimSpace(target) == "" {
 		return apperr.Validation("导出路径不能为空")
 	}
@@ -54,9 +64,57 @@ func (s *Service) ExportDatabase(appName, target string) (err error) {
 		return apperr.Wrap(fmt.Errorf("导出数据库失败: %w", execErr))
 	}
 
+	if !includeSitProfile {
+		if stripErr := stripSitProfile(tmp); stripErr != nil {
+			return stripErr
+		}
+	}
+
+	// VACUUM INTO 生成的文件权限受 umask 影响；画像数据敏感，POSIX 下收紧。
+	if runtime.GOOS != "windows" {
+		if chmodErr := os.Chmod(tmp, 0o600); chmodErr != nil {
+			return apperr.Wrap(fmt.Errorf("收紧导出文件权限失败: %w", chmodErr))
+		}
+	}
+
 	// 原子替换（同目录，同文件系统）。
 	if renameErr := os.Rename(tmp, cleanTarget); renameErr != nil {
 		return apperr.Wrap(fmt.Errorf("写入导出文件失败: %w", renameErr))
+	}
+	return nil
+}
+
+// stripSitProfile 在导出副本上删除应用画像/久坐表。
+//
+// 用 DROP 而不是 DELETE：DROP + VACUUM 会把数据页从文件里重写掉，
+// 避免仅删行时敏感内容仍残留在空闲页里。副本关闭后再由调用方改名。
+func stripSitProfile(path string) error {
+	backup, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Discard})
+	if err != nil {
+		return apperr.Wrap(fmt.Errorf("打开导出副本失败: %w", err))
+	}
+	sqlDB, err := backup.DB()
+	if err != nil {
+		return apperr.Wrap(fmt.Errorf("获取导出副本连接失败: %w", err))
+	}
+	defer func() { _ = sqlDB.Close() }()
+
+	for _, table := range []any{
+		&model.AppUsageSession{},
+		&model.AppCategoryOverride{},
+		&model.SitSession{},
+		&model.SitBreak{},
+		&model.SitSpeech{},
+	} {
+		if !backup.Migrator().HasTable(table) {
+			continue
+		}
+		if dropErr := backup.Migrator().DropTable(table); dropErr != nil {
+			return apperr.Wrap(fmt.Errorf("删除导出副本的画像表失败: %w", dropErr))
+		}
+	}
+	if vacuumErr := backup.Exec("VACUUM").Error; vacuumErr != nil {
+		return apperr.Wrap(fmt.Errorf("整理导出副本失败: %w", vacuumErr))
 	}
 	return nil
 }

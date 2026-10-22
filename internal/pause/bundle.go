@@ -15,8 +15,15 @@ type Config struct {
 	// IdleThreshold 空闲阈值（默认 5 分钟，由调用方夹取）。
 	IdleThreshold time.Duration
 
-	// LockEnabled 是否启用锁屏/休眠检测。
+	// LockEnabled 是否把锁屏/休眠信号加入暂停判定（用户设置里的「锁屏暂停」）。
 	LockEnabled bool
+	// LockWatcherEnabled 是否启动锁屏 watcher。
+	//
+	// 【与 LockEnabled 分开】久坐感知需要读锁屏时长（即使只是基础检测），但用户
+	// 可能关掉了「锁屏暂停」。watcher 只负责更新 Bundle.Lock 的状态；是否把
+	// ReasonLock 加进 Composite 仍由 LockEnabled 决定。生产配置由组合根按
+	// 「锁屏暂停 || 久坐总开关」设置。
+	LockWatcherEnabled bool
 
 	// MeetingEnabled 是否启用会议应用前台检测。
 	MeetingEnabled bool
@@ -50,7 +57,10 @@ type Bundle struct {
 	Stop func()
 }
 
-// NewBundle 按配置装配暂停信号，并启动平台层的锁屏监听。
+// lockWatcherStarter 是测试可替换的锁屏 watcher 启动器；生产使用平台实现。
+var lockWatcherStarter = startLockWatcher
+
+// NewBundle 按配置装配暂停信号，并启动平台层的锁屏监听（由 LockWatcherEnabled 控制）。
 //
 // 返回的 Bundle.Stop 需要在应用退出前调用；否则 goroutine 会一直轮询。
 // cfg 里所有 Enabled 都为 false 时，仍返回一个可用 provider：自动信号全部不触发，
@@ -86,8 +96,8 @@ func NewBundle(cfg Config) (*Bundle, error) {
 
 	provider := NewCompositeProvider(detectors...)
 	var stopLockWatcher func()
-	if cfg.LockEnabled {
-		stopLockWatcher = startLockWatcher(lock)
+	if cfg.LockWatcherEnabled {
+		stopLockWatcher = lockWatcherStarter(lock)
 	}
 	var stopMeetingWatcher func()
 	if cfg.MeetingEnabled {

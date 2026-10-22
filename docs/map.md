@@ -11,6 +11,7 @@
 | `pet_window.go` | 桌面宠物窗口的建窗参数与尺寸换算（透明 + 置顶 + 位置还原） |
 | `pet_bubble.go` | 宠物气泡扩窗的窗口接线（工作区选择、扩窗状态、还原、持久化反算） |
 | `pet_bubble_geometry.go` | 气泡扩窗的几何纯函数（底边锚定 / 工作区夹取 / 基础矩形反算） |
+| `sit_runtime.go` | 久坐感知运行时：5 秒 tick、Tracker 编排、前台应用采样、气泡/预算、主动休息与锁屏抵扣 |
 | `AGENTS.md` | 跨端通用铁律 |
 | `CLAUDE.md` | Go 域规范 |
 | `frontend/CLAUDE.md` | Vue 域规范 |
@@ -24,7 +25,8 @@
 |---|---|
 | `internal/model/` | 数据模型 + `AllModels()` 注册表（模型唯一真相） |
 | `internal/database/` | gorm + SQLite 连接、模型迁移执行（含 reminders 旧表重建迁移） |
-| `internal/service/` | 业务服务层（绑定方法经此访问数据库；`reminder.go` 提醒 CRUD、`quickadd.go` AI 快速添加、`pet.go` 宠物素材包、`scenario_template.go` 场景模板实例化） |
+| `internal/service/` | 业务服务层（绑定方法经此访问数据库；`reminder.go` 提醒 CRUD、`quickadd.go` AI 快速添加、`pet.go` 宠物素材包、`scenario_template.go` 场景模板实例化、`sit.go` 久坐会话/休息/发言/抵扣/应用画像与原生日聚合） |
+| `internal/service/export.go` | 数据库导出：`VACUUM INTO` 一致性快照、可选排除应用/久坐表、POSIX 0600 |
 | `internal/appdir/` | **单一真相**：应用数据目录（数据库/配置/日志/崩溃日志同目录） |
 | `internal/appinfo/` | 版本/平台/关键路径（版本注入目标见 `scripts/package.sh`） |
 | `internal/config/` | `config.json` 读写（主题 + 窗口几何 + 提醒行为 + 桌面宠物） |
@@ -36,7 +38,8 @@
 | `internal/apperr/` | **契约**：错误协议（code/message + `Format`） |
 | `internal/page/` | **契约**：分页协议（`Request` / `Result[T]`） |
 | `internal/event/` | **契约**：事件协议（`<domain>:<action>` + payload） |
-| `internal/reminder/` | 本地提醒调度引擎（`schedule.go` 纯时间计算 + `engine.go` 调度循环 + 一次性提醒全局扫描 + `contract.go` 接口与事件载荷） |
+| `internal/reminder/` | 本地提醒调度引擎（`schedule.go` 纯时间计算 + `engine.go` 调度循环 + 一次性提醒全局扫描 + `contract.go` 接口与事件载荷 + `BreakProvider` 休息跳过） |
+| `internal/sit/` | 久坐领域层：全局时钟/分级空闲/情绪/专注会话/软提醒策略/记忆/文案/类别与对外契约 |
 | `internal/scenariotemplate/` | 场景模板唯一真相：5 个内置模板、目录、按目标过滤/按工作时段裁切/目标夹取的纯函数 |
 | `internal/ai/` | OpenAI 兼容的最小客户端（计划生成 + `quickadd.go` 一次性/周期草稿解析；`parse.go` 容错 JSON） |
 | `internal/guard/` | 架构护栏（以 go test 形式运行，含契约护栏与**前端镜像一致性**护栏） |
@@ -56,6 +59,7 @@
 | `lib/event.ts` | **契约**：事件协议前端镜像（事件名 / payload / `onEvent` 订阅） |
 | `lib/page.ts` | **契约**：分页协议前端镜像（类型 / 页大小常量） |
 | `lib/reminder.ts` | **契约**：提醒领域前端镜像（事件名 / 载荷 / kind 枚举与展示元数据） |
+| `lib/sit.ts` | **契约**：久坐状态/情绪/语气/类别/动作镜像与展示标签（不含应用名） |
 | `lib/template.ts` | 场景模板展示文案（提醒日程 / 类型标签 / 下一次计划提醒格式化） |
 | `lib/attachment.ts` | 附件展示常量与文件名/类型判断（真正限额在 Go 侧 `ai_input.go`） |
 | `lib/pet.ts` | 宠物渲染的单一真相（图集布局 / 动画行序 / 帧率；与素材约定对齐，无 Go 侧镜像） |
@@ -63,7 +67,7 @@
 | `lib/log.ts` | **契约**：前端日志出口 + 全局错误兜底（唯一正确出口） |
 | `composables/` | 组合式函数（`useEvent` 自动解绑、`usePagedList` 列表加载） |
 | `styles/` | 设计令牌与主题（tokens / theme / element 覆盖） |
-| `views/` | 页面（`make gen` 生成的模块页面落在此处；`Home.vue` 含快速添加/即将到来，`Plan.vue` 计划维护，`Scenarios.vue` 场景与 AI 计划/模板库，`Welcome.vue` 首次引导，`Pet.vue` 宠物裸页面） |
+| `views/` | 页面（`make gen` 生成的模块页面落在此处；`Home.vue` 含快速添加/即将到来，`Plan.vue` 计划维护，`Scenarios.vue` 场景与 AI 计划/模板库，`Sit.vue` 久坐时长/休息/抵扣/7 天/按日应用明细与类别纠正，`Welcome.vue` 首次引导，`Pet.vue` 宠物裸页面） |
 
 ## 模板与工具
 
@@ -93,6 +97,7 @@
 | 路径 | 内容 |
 |---|---|
 | `openspec/specs/` | 能力规格基线（唯一真相） |
+| `openspec/specs/sit-awareness/spec.md` | 久坐感知/应用画像/软提醒/记忆/数据控制能力基线 |
 | `openspec/changes/` | 进行中的变更提案 |
 | `docs/specs/` | `to-spec` 产出的规格说明书（供拆任务） |
 | `docs/competitive-analysis.md` | 第一轮竞品差异与基础能力补齐的取舍（2026-10） |
@@ -100,7 +105,8 @@
 | `docs/specs/2026-10-20-baseline-parity.md` | 本轮规格：智能免打扰 + 场景化休息模式 + 桌面集成（P0/P1） |
 | `docs/specs/2026-10-21-uninterrupted-slice.md` | 「不被打断」切片规格：演示模式 + 自然停顿顺延 |
 | `docs/specs/2026-10-21-pet-bubble-expansion-and-refresh.md` | 宠物气泡扩窗 + 打卡刷新 + 休息结算规格 |
-| `docs/specs/2026-10-21-scenario-templates-and-onboarding.md` | 场景模板 + 首次引导（三步）规格 |
+| `docs/specs/2026-10-21-scenario-templates-and-onboarding.md` | 场景模板 + 首次引导规格（旧版三步；现行为四步，见 `CONTEXT.md`） |
+| `docs/specs/2026-10-22-sit-awareness-and-sassy-pet.md` | 久坐感知 + 应用使用画像 + 毒舌宠物 + 久坐页规格 |
 | `docs/adr/` | 不可逆决策记录（如一次性提醒独立于场景） |
 | `CONTEXT.md` | 领域术语表（一次性 / 每日单点 / 快速添加等） |
 | `docs/代码规范.md` | 命名与管道契约的编码约定 |

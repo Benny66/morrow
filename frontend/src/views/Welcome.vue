@@ -6,6 +6,7 @@ import {
   CompleteOnboarding,
   ListScenarioTemplates,
   PreviewScenarioTemplate,
+  SetSitProfileEnabled,
 } from '../../bindings/morrow/app.js'
 import { invoke, type AppError } from '../lib/invoke'
 import { kindMeta } from '../lib/reminder'
@@ -19,7 +20,7 @@ type TemplateCatalog = Awaited<ReturnType<typeof ListScenarioTemplates>>
 type TemplateRow = NonNullable<TemplateCatalog['templates']>[number]
 type PreviewRow = NonNullable<Awaited<ReturnType<typeof PreviewScenarioTemplate>>>
 type ApplyResult = NonNullable<Awaited<ReturnType<typeof ApplyScenarioTemplate>>>
-type Step = 1 | 2 | 3 | 'done'
+type Step = 1 | 2 | 3 | 4 | 'done'
 
 const DEFAULT_WORK_START = '09:00'
 const DEFAULT_WORK_END = '18:00'
@@ -43,7 +44,7 @@ const appliedResult = ref<ApplyResult | null>(null)
 const completionWarning = ref('')
 
 const progressText = computed(() =>
-  step.value === 'done' ? '首次设置 · 完成' : `首次设置 · 第 ${step.value} / 3 步`,
+  step.value === 'done' ? '首次设置 · 完成' : `首次设置 · 第 ${step.value} / 4 步`,
 )
 const title = computed(() => {
   switch (step.value) {
@@ -53,6 +54,8 @@ const title = computed(() => {
       return '最想先解决哪两件事？'
     case 3:
       return '选一个最接近你一天的模板'
+    case 4:
+      return '让小满知道你在用什么'
     default:
       return '计划已经就绪'
   }
@@ -65,6 +68,8 @@ const subtitle = computed(() => {
       return '恰好选两个；模板会只保留这两类提醒。'
     case 3:
       return '模板是确定性内容，不调用 AI；生成后仍可在计划页逐条修改。'
+    case 4:
+      return '选择小满能知道多少。应用画像只存本机、可随时关闭和清空。'
     default:
       return '已自动启用，下一次提醒会按下面的时间到来。'
   }
@@ -177,6 +182,10 @@ function next(): void {
     if (!canLeaveGoals.value) return
     step.value = 3
     if (selectedTemplateKey.value) void loadPreview()
+    return
+  }
+  if (step.value === 3) {
+    step.value = 4
   }
 }
 
@@ -184,6 +193,7 @@ function back(): void {
   error.value = null
   if (step.value === 2) step.value = 1
   else if (step.value === 3) step.value = 2
+  else if (step.value === 4) step.value = 3
 }
 
 /**
@@ -192,11 +202,15 @@ function back(): void {
  * 若计划已创建但标记写入失败，不重复建计划——保留 appliedResult，
  * 允许在完成页只重试写标记；下次启动也会因已有场景自动补齐。
  */
-async function finish(): Promise<void> {
+async function finish(profileEnabled: boolean): Promise<void> {
   if (!canFinish.value || !selectedTemplateKey.value) return
   applying.value = true
   error.value = null
   try {
+    await invoke(
+      () => SetSitProfileEnabled(profileEnabled, false),
+      'SetSitProfileEnabled',
+    )
     let applied = appliedResult.value
     if (!applied) {
       const result = await invoke(
@@ -404,8 +418,29 @@ onMounted(() => {
 
       <div class="step__actions">
         <el-button @click="back()">上一步</el-button>
-        <el-button type="primary" :loading="applying" :disabled="!canFinish" @click="finish()">
-          创建计划并开始
+        <el-button type="primary" :disabled="!canFinish" @click="next()">下一步</el-button>
+      </div>
+    </div>
+
+    <div v-else-if="step === 4" class="step">
+      <div class="consent">
+        <p class="consent__lead">
+          开启后，小满会记录你这个时段在用的应用名、起止时间、使用时长与行为类别。
+        </p>
+        <ul class="consent__list">
+          <li>只存在本机，不上传，不读窗口标题、屏幕内容或键鼠输入内容。</li>
+          <li>可以在「设置 → 久坐感知」或「久坐」页查看、关闭、清空。</li>
+          <li>小满默认说话比较直（毒舌），可随时在设置或气泡里切换。</li>
+        </ul>
+        <p class="step__note">只使用基础检测：仍会记录连续用机与休息，但不读取应用名称。</p>
+      </div>
+      <div class="step__actions">
+        <el-button @click="back()">上一步</el-button>
+        <el-button :disabled="!canFinish || applying" @click="finish(false)">
+          只使用基础检测
+        </el-button>
+        <el-button type="primary" :loading="applying" :disabled="!canFinish" @click="finish(true)">
+          开启应用画像并开始
         </el-button>
       </div>
     </div>
@@ -686,6 +721,29 @@ onMounted(() => {
   grid-column: 2;
   color: var(--text-3);
   font-family: var(--font-mono);
+}
+
+/* 第 4 步：应用画像同意 */
+.consent {
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+
+.consent__lead {
+  margin: 0 0 var(--space-2);
+  color: var(--text-1);
+  font-size: var(--font-size-sm);
+  line-height: 1.7;
+}
+
+.consent__list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: var(--font-size-xs);
+  line-height: 1.9;
 }
 
 /* 完成页 */

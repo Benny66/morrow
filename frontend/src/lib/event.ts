@@ -35,7 +35,23 @@
 //	    percent.value = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0
 //	  })
 
-import { Events } from '@wailsio/runtime'
+/**
+ * Wails 注入运行时的事件接口（只声明本模块用到的部分）。
+ *
+ * 【为什么不用 npm 的 @wailsio/runtime.Events】实测 beta.23 下，npm 包与 Wails
+ * 注入的 `/wails/runtime.js` 是两份运行时实例、两张事件表；Go 的 Event.Emit
+ * 走注入实例的 `window._wails.dispatchWailsEvent`，npm 实例上的 `Events.On`
+ * 收不到任何事件——订阅静默成功、永远不触发。绑定调用（$Call）用 npm 实例没
+ * 问题，事件必须走注入实例。这里用动态 import 取同一个实例，并用
+ * `@vite-ignore` 阻止 Vite 把它打进 bundle。
+ */
+import { logWarn } from './log'
+
+type WailsRuntimeEvents = {
+  Events: {
+    On: (name: string, callback: (event: { data: unknown }) => void) => () => void
+  }
+}
 
 /** 事件动作常量。单一真相在 Go 的 internal/event（Action*），此处为镜像。 */
 export const EventAction = {
@@ -93,7 +109,25 @@ export interface EventResult {
  * 不会有事件到达，而这里没有可靠的本地判据可以发现它。
  */
 export function onEvent<T = unknown>(name: string, handler: (payload: T) => void): () => void {
-  return Events.On(name, (ev) => {
-    handler(ev.data as T)
-  })
+  let off: (() => void) | undefined
+  let cancelled = false
+
+  const runtimePath = '/wails/runtime.js'
+  void import(/* @vite-ignore */ runtimePath)
+    .then((runtime: WailsRuntimeEvents) => {
+      if (cancelled) return
+      off = runtime.Events.On(name, (ev) => {
+        handler(ev.data as T)
+      })
+    })
+    .catch((err: unknown) => {
+      // 非 Wails 环境（纯浏览器预览）没有注入运行时；订阅无法建立。
+      // 这里不假装成功，留一条 warn 便于诊断。
+      logWarn('Wails 事件运行时不可用，事件订阅未建立', { name, err: String(err) })
+    })
+
+  return () => {
+    cancelled = true
+    off?.()
+  }
 }

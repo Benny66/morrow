@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,15 +51,29 @@ func (slogLogger) Trace(_ context.Context, begin time.Time, fc func() (string, i
 	}
 
 	sql, rows := fc()
+	sql = truncateSQL(redactSQLLiterals(sql))
 	if err != nil {
 		slog.Error("SQL 执行失败",
-			"ms", elapsed.Milliseconds(), "rows", rows, "sql", truncateSQL(sql), "err", err)
+			"ms", elapsed.Milliseconds(), "rows", rows, "sql", sql, "err", err)
 		return
 	}
 	if elapsed >= slowQueryThreshold {
 		slog.Warn("慢查询",
-			"ms", elapsed.Milliseconds(), "rows", rows, "sql", truncateSQL(sql))
+			"ms", elapsed.Milliseconds(), "rows", rows, "sql", sql)
 	}
+}
+
+// sqlStringLiteral 匹配 SQLite 的单/双引号字符串字面量（含重复引号转义）。
+// GORM 的字段名用反引号，值可能被渲染成 '...' 或 "..."，两种都要脱敏。
+var sqlStringLiteral = regexp.MustCompile(`'(?:[^']|'')*'|"(?:[^"]|"")*"`)
+
+// redactSQLLiterals 把 SQL 里的字符串值替换成 '?'。
+//
+// 应用画像会把 bundle ID/进程名与宠物文案写进参数；gorm 的 Trace 回调返回的是
+// 插值后的完整 SQL。若原样落日志，慢查询/错误路径就会泄露应用标识或文案全文，
+// 违反「日志只记错误计数/提醒 ID/模板 ID」的隐私边界。保留语句结构即可诊断。
+func redactSQLLiterals(sql string) string {
+	return sqlStringLiteral.ReplaceAllString(sql, "'?'")
 }
 
 // truncateSQL 压平换行并按字符截断，保证一条日志一行、不会被超长语句撑爆。

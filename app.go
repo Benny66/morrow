@@ -30,6 +30,7 @@ import (
 	"morrow/internal/reveal"
 	"morrow/internal/scenariotemplate"
 	"morrow/internal/service"
+	"morrow/internal/sit"
 	"morrow/internal/systemprefs"
 	"morrow/internal/tray"
 	// gen:import
@@ -120,6 +121,10 @@ type App struct {
 	// pause 是智能免打扰的信号聚合器；nil 表示所有暂停信号都关了。
 	// 由 startReminderEngine 装配，ServiceShutdown 里调 Stop 释放轮询 goroutine。
 	pause *pause.Bundle
+
+	// sit 是久坐感知运行时（5 秒 tick、Tracker、气泡/预算编排）。
+	// 由 startSitRuntime 装配，ServiceShutdown 里先于 pause 停掉。
+	sit *sitRuntime
 	// presentation 是演示模式的临时状态机；不持久化，重启即关闭。
 	// 它只保存状态，暂停/窗口显隐由 App 桥接（见 setPresentationMode）。
 	presentation *presentation.Controller
@@ -145,6 +150,9 @@ type App struct {
 
 	// reminderCfg 是引擎读取的行为设置快照。
 	reminderCfg reminder.Settings
+
+	// sitCfg 是久坐运行时读取的设置快照（开关/阈值/语气/静音日期/宠物可见/静默）。
+	sitCfg sitRuntimeSettings
 
 	// aiCfg 是 AI 连接配置快照（含明文密钥，只在后端内部流转）。
 	aiCfg ai.Settings
@@ -339,6 +347,9 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 	// （见 main.go 的 Services 顺序），故首轮 tick 的通知失败会走"退回卡片"分支。
 	a.startReminderEngine()
 
+	// 启动久坐感知：依赖 pause bundle、restMode 与 service，必须在提醒引擎之后。
+	a.startSitRuntime()
+
 	// 启动宠物贴边监测：轮询窗口位置，拖到屏幕边缘时自动收起。
 	// 放在最后，与提醒链路无依赖——它只读窗口位置。
 	a.startPetDockWatcher()
@@ -353,6 +364,12 @@ func (a *App) ServiceShutdown() error {
 	// 0. 先停提醒引擎：它会写数据库，必须在关库之前安静下来。
 	if a.engine != nil {
 		a.engine.Stop()
+	}
+
+	// 0.1 停久坐感知：它每 5 秒读窗口/配置并写库，必须在 pause bundle 与数据库关闭前停。
+	if a.sit != nil {
+		a.sit.stop()
+		a.sit = nil
 	}
 
 	// 0.3 停智能免打扰的信号采集：锁屏轮询 goroutine 依赖 LockDetector，
@@ -590,17 +607,47 @@ func (a *App) GetLaunchArgs() []string {
 	return out
 }
 
-// ExportDatabase 把数据库完整导出到 targetPath（通常来自 SelectSaveFile）。
+// ExportDatabase 把数据库导出到 targetPath（通常来自 SelectSaveFile）。
+// includeSitProfile=false 时副本不含应用与久坐明细；CheckIn 与提醒数据保留。
 // 目标已存在会被覆盖（用户已在系统保存对话框确认过）；位于数据目录内会被拒绝。
-func (a *App) ExportDatabase(targetPath string) error {
-	return a.svc.ExportDatabase(appName, targetPath)
+func (a *App) ExportDatabase(targetPath string, includeSitProfile bool) error {
+	return a.svc.ExportDatabase(appName, targetPath, includeSitProfile)
 }
 
 // ImportDatabase 用 sourcePath（通常来自 SelectFile，即此前导出的备份）替换当前数据库。
 // 失败自动回滚到导入前状态（见 internal/service/import.go）；成功后建议重启应用，
 // 让各页面以新库数据重新加载（前端在恢复成功提示中说明）。
+//
+// 导入会整体替换数据库；先停久坐采样，成功后收尾备份里可能残留的开放会话并重置
+// 内存 Tracker，避免旧 session/id 继续写进新库。
 func (a *App) ImportDatabase(sourcePath string) error {
-	return a.svc.ImportDatabase(appName, sourcePath)
+	if a.svc == nil {
+		return apperr.New(apperr.CodeInternal, "服务尚未初始化")
+	}
+	running := a.sit != nil && a.sit.cancel != nil
+	if running {
+		a.sit.stop()
+	}
+	err := a.svc.ImportDatabase(appName, sourcePath)
+	if a.sit != nil {
+		if err == nil {
+			if n, recErr := a.svc.RecoverOpenAppUsageSessions(); recErr != nil {
+				slog.Warn("恢复数据库后收尾应用会话失败", "err", recErr)
+			} else if n > 0 {
+				slog.Info("恢复数据库后收尾应用会话", "count", n)
+			}
+			if n, recErr := a.svc.RecoverOpenSitSessions(); recErr != nil {
+				slog.Warn("恢复数据库后收尾久坐会话失败", "err", recErr)
+			} else if n > 0 {
+				slog.Info("恢复数据库后收尾久坐会话", "count", n)
+			}
+			a.sit.resetRuntimeState()
+		}
+		if running {
+			a.sit.start()
+		}
+	}
+	return err
 }
 
 // ActionSecondInstance 是「应用被二次启动」的事件动作（单一真相）。
@@ -922,11 +969,30 @@ func (a *App) syncSettingsFromConfig() {
 		NaturalPauseMaxSeconds: a.cfg.NaturalPauseMaxSeconds,
 	}
 	aiSettings := a.cfg.AISettings()
+	sitSettings := a.cfg.LoadSitSettings()
+	sitCfg := sitRuntimeSettings{
+		Enabled:          sitSettings.Enabled,
+		ProfileEnabled:   sitSettings.ProfileEnabled,
+		ThresholdMinutes: sitSettings.ThresholdMinutes,
+		Tone:             sitSettings.Tone,
+		MutedDate:        a.cfg.SitMutedDate,
+		PetVisible:       a.cfg.PetVisible,
+		QuietStart:       a.cfg.QuietStart,
+		QuietEnd:         a.cfg.QuietEnd,
+	}
 
 	a.settingsMu.Lock()
 	a.reminderCfg = reminderSettings
+	a.sitCfg = sitCfg
 	a.aiCfg = aiSettings
 	a.settingsMu.Unlock()
+}
+
+// currentSitRuntimeSettings 返回久坐运行时的设置快照。
+func (a *App) currentSitRuntimeSettings() sitRuntimeSettings {
+	a.settingsMu.RLock()
+	defer a.settingsMu.RUnlock()
+	return a.sitCfg
 }
 
 // currentReminderSettings 返回提醒行为设置快照。
@@ -1720,6 +1786,7 @@ func (a *App) SetPetSettings(in config.PetSettings) (string, error) {
 	if err := a.cfg.SavePetSettings(in); err != nil {
 		return "", apperr.Wrap(err)
 	}
+	a.syncSettingsFromConfig()
 
 	if w != nil {
 		if in.PetVisible {
@@ -1748,6 +1815,162 @@ func (a *App) SetPetSettings(in config.PetSettings) (string, error) {
 	}
 	slog.Info("宠物设置已保存", "visible", in.PetVisible, "scale", a.cfg.PetScaleValue())
 	return "已保存", nil
+}
+
+// ---------------------------------------------------------------------------
+// 绑定方法：久坐感知
+// ---------------------------------------------------------------------------
+
+// GetSitSnapshot 返回宠物窗口轮询的久坐快照。
+//
+// 【不返回 error】这是 4 秒一次的轮询；内部 DB 异常只记日志并返回上一轮可见的
+// 空快照，避免轮询把错误日志刷爆。需要错误可见的写在设置/动作绑定里。
+func (a *App) GetSitSnapshot() sit.Snapshot {
+	if a.sit == nil {
+		return sit.Snapshot{
+			State:             sit.StateIdle,
+			PlatformSupported: pause.IdleSupported(),
+		}
+	}
+	return a.sit.snapshot()
+}
+
+// GetSitSettings 返回久坐设置（只读字段按当前平台补齐）。
+func (a *App) GetSitSettings() (config.SitSettings, error) {
+	if a.cfg == nil {
+		return config.SitSettings{}, apperr.New(apperr.CodeInternal, "配置尚未初始化")
+	}
+	settings := a.cfg.LoadSitSettings()
+	settings.PlatformSupported = pause.IdleSupported()
+	settings.ProfileStatus = ""
+	if !settings.PlatformSupported {
+		settings.ProfileStatus = sit.ProfileStatusUnsupported
+	} else if settings.ProfileEnabled {
+		if a.sit != nil {
+			settings.ProfileStatus = a.sit.currentProfileStatus()
+			if settings.ProfileStatus == "" {
+				settings.ProfileStatus = sit.ProfileStatusNoData
+			}
+		} else {
+			settings.ProfileStatus = sit.ProfileStatusNoData
+		}
+	}
+	return settings, nil
+}
+
+// SetSitSettings 保存久坐设置；运行时下一次 tick 生效。
+func (a *App) SetSitSettings(in config.SitSettings) error {
+	if a.cfg == nil {
+		return apperr.New(apperr.CodeInternal, "配置尚未初始化")
+	}
+	oldTone := sit.NormalizeTone(a.cfg.SitTone)
+	if err := a.cfg.SaveSitSettings(in); err != nil {
+		return apperr.Wrap(err)
+	}
+	a.syncSettingsFromConfig()
+	// 语气切换后旧语气的待展示气泡不再弹出，下一条用新语气。
+	if oldTone != sit.NormalizeTone(string(in.Tone)) && a.svc != nil {
+		_ = a.svc.ExpireSitSpeeches(time.Now())
+	}
+	return nil
+}
+
+// SetSitProfileEnabled 记录应用画像同意：开启/关闭都写 asked；关闭时可删除历史。
+func (a *App) SetSitProfileEnabled(enabled bool, deleteHistory bool) error {
+	if a.sit == nil {
+		return apperr.New(apperr.CodeInternal, "久坐感知尚未就绪")
+	}
+	return a.sit.setProfileEnabled(enabled, deleteHistory)
+}
+
+// AckSitBubble 确认一条宠物久坐气泡已被真正渲染。
+func (a *App) AckSitBubble(id string) bool {
+	if a.svc == nil {
+		return false
+	}
+	bubbleID := parseSitBubbleID(id)
+	if bubbleID == 0 {
+		return false
+	}
+	ok, err := a.svc.AckSitSpeech(bubbleID, time.Now())
+	if err != nil {
+		slog.Warn("确认久坐气泡失败", "err", err)
+		return false
+	}
+	return ok
+}
+
+// TakeActiveBreak 处理「起来走走」：清零久坐、记录休息；目标抵扣在 004 接入。
+func (a *App) TakeActiveBreak(bubbleID string) (sit.SitActionResult, error) {
+	if a.sit == nil {
+		return sit.SitActionResult{}, apperr.New(apperr.CodeInternal, "久坐感知尚未就绪")
+	}
+	return a.sit.takeActiveBreak(bubbleID)
+}
+
+// SnoozeSitNudge 处理「再坐 10 分钟」。
+func (a *App) SnoozeSitNudge(bubbleID string) (sit.SitActionResult, error) {
+	if a.sit == nil {
+		return sit.SitActionResult{}, apperr.New(apperr.CodeInternal, "久坐感知尚未就绪")
+	}
+	return a.sit.snooze(bubbleID)
+}
+
+// MuteSitToday 处理「今天先这样」。
+func (a *App) MuteSitToday() (sit.SitActionResult, error) {
+	if a.sit == nil {
+		return sit.SitActionResult{}, apperr.New(apperr.CodeInternal, "久坐感知尚未就绪")
+	}
+	return a.sit.muteToday()
+}
+
+// SetSitTone 切换宠物语气（「别这样说」/设置页共用）。
+func (a *App) SetSitTone(tone string) (sit.SitActionResult, error) {
+	if a.sit == nil {
+		return sit.SitActionResult{}, apperr.New(apperr.CodeInternal, "久坐感知尚未就绪")
+	}
+	return a.sit.setTone(tone)
+}
+
+// SetAppCategory 保存用户对某个应用的行为类别纠正；历史与后续视图使用新类别。
+func (a *App) SetAppCategory(platform string, appID string, category string) error {
+	if a.svc == nil {
+		return apperr.New(apperr.CodeInternal, "服务尚未初始化")
+	}
+	if err := a.svc.SetAppCategory(platform, appID, category); err != nil {
+		return err
+	}
+	if a.sit != nil {
+		a.sit.invalidateAppCategory()
+	}
+	return nil
+}
+
+// GetSitDay 返回某天的久坐/休息聚合；开放会话由 GetSitSnapshot 补充。
+func (a *App) GetSitDay(date string) (service.SitDay, error) {
+	if a.svc == nil {
+		return service.SitDay{}, apperr.New(apperr.CodeInternal, "服务尚未初始化")
+	}
+	return a.svc.GetSitDay(date)
+}
+
+// GetSitTrend 返回最近 days 天（含今天）的久坐日聚合。
+func (a *App) GetSitTrend(days int) ([]service.SitDay, error) {
+	if a.svc == nil {
+		return nil, apperr.New(apperr.CodeInternal, "服务尚未初始化")
+	}
+	return a.svc.GetSitTrend(days)
+}
+
+// ClearSitProfile 清空应用画像与久坐数据；CheckIn 与连续天数保留。
+func (a *App) ClearSitProfile() error {
+	if a.sit != nil {
+		return a.sit.clearProfileData()
+	}
+	if a.svc == nil {
+		return apperr.New(apperr.CodeInternal, "服务尚未初始化")
+	}
+	return a.svc.ClearSitProfile()
 }
 
 // SetPetBubbleVisible 切换宠物窗口的气泡形态。
@@ -2278,13 +2501,14 @@ func (a *App) SetPauseSettings(in config.PauseSettings) (string, error) {
 // 「启动时启用了、保存设置后又被关掉」这种诡异漂移。
 func bundleConfigFrom(c *config.Config) pause.Config {
 	return pause.Config{
-		IdleEnabled:       c.PauseIdleEnabled,
-		IdleThreshold:     time.Duration(c.PauseIdleMinutesValue()) * time.Minute,
-		LockEnabled:       c.PauseLockEnabled,
-		MeetingEnabled:    c.PauseMeetingEnabled,
-		FullscreenEnabled: c.PauseFullscreenEnabled,
-		FocusEnabled:      c.PauseFocusEnabled,
-		CalendarEnabled:   c.PauseCalendarEnabled,
+		IdleEnabled:        c.PauseIdleEnabled,
+		IdleThreshold:      time.Duration(c.PauseIdleMinutesValue()) * time.Minute,
+		LockEnabled:        c.PauseLockEnabled,
+		LockWatcherEnabled: c.PauseLockEnabled || c.SitEnabled,
+		MeetingEnabled:     c.PauseMeetingEnabled,
+		FullscreenEnabled:  c.PauseFullscreenEnabled,
+		FocusEnabled:       c.PauseFocusEnabled,
+		CalendarEnabled:    c.PauseCalendarEnabled,
 	}
 }
 
@@ -2370,6 +2594,7 @@ func (a *App) setPetVisible(visible bool) error {
 	if err := a.cfg.Save(); err != nil {
 		slog.Error("保存宠物窗口开关失败", "err", err)
 	}
+	a.syncSettingsFromConfig()
 	if a.petShouldBeVisible() {
 		// 若之前贴边收着，先把窗口移回展开位置再 Show：
 		// 否则用户看到的是屏幕外那块，会以为宠物丢了。

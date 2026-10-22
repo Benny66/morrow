@@ -3,6 +3,7 @@ package reminder
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"morrow/internal/event"
 	"morrow/internal/model"
@@ -180,6 +181,14 @@ func FireIDFromNotificationID(id string) uint {
 		return 0
 	}
 	return uint(parsed)
+}
+
+// BreakProvider 是久坐休息的窄接口：引擎在送达 stand/move 前问一句
+// 「用户刚真正休息过吗」。true 表示把该触发点落 FireSilent，不投递。
+//
+// 当前规则不区分 reminderID/fireAt；保留参数是为了将来按提醒/时段细化。
+type BreakProvider interface {
+	ShouldSkipStandMove(reminderID uint, fireAt int64, now time.Time) bool
 }
 
 // Store 是引擎需要的持久化能力（由 service.Service 实现）。
