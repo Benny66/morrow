@@ -4,33 +4,57 @@
 
 <h1>Morrow</h1>
 
-<p><strong>A local-first desktop wellness app, carried by a small desktop pet.</strong><br>
-本地优先的桌面健康提醒应用。提醒由一只叫「小满」的桌面宠物承载：一滴水，头顶一株芽，芽随今日完成率生长。</p>
+<p><strong>A local-first wellness app, carried by a desktop pet.</strong><br>
+Morrow reminds you to drink, stand, move and look away — 小满, a small water-drop pet with a sprout on its head, delivers the message and grows with your daily progress.<br>
+<sub>本地优先的桌面健康提醒应用。提醒由一只叫「小满」的桌面宠物承载：一滴水，头顶一株芽，芽随今日完成率生长。</sub></p>
+
+<p>
+  <a href="https://github.com/Benny66/morrow/releases/latest"><img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
+  <a href="https://github.com/Benny66/morrow/releases/latest"><img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
+</p>
+
+<p><sub>界面目前只有中文 / The app UI is currently Chinese-only.</sub></p>
 
 <p>
   <a href="https://github.com/Benny66/morrow/actions/workflows/build.yml"><img src="https://github.com/Benny66/morrow/actions/workflows/build.yml/badge.svg?branch=main" alt="Build"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-2f6f4e?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-2f6f4e?style=flat-square" alt="Platforms">
   <img src="https://img.shields.io/badge/Wails-v3-DF2B2B?style=flat-square" alt="Wails v3">
   <img src="https://img.shields.io/badge/Vue-3-42b883?style=flat-square" alt="Vue 3">
   <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square" alt="Go 1.25+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2f6f4e?style=flat-square" alt="MIT License"></a>
 </p>
 
 <p>
+  <a href="#download">下载 / Download</a> ·
   <a href="#why-morrow">为什么 Morrow</a> ·
   <a href="#features">功能</a> ·
   <a href="#screenshots">界面</a> ·
-  <a href="#quick-start">快速开始</a> ·
+  <a href="#quick-start">源码构建</a> ·
   <a href="#architecture">架构</a> ·
   <a href="#privacy">隐私</a> ·
   <a href="#docs">文档</a>
 </p>
 
+<p align="center">
+  <img src="docs/images/pet-demo.gif" width="400" alt="Morrow's desktop pet 小满 shows a sassy memory bubble, then waves when clicked">
+</p>
+<p align="center"><sub><b>小满 / Xiaoman</b> · 它记得你今天坐了多久，也会在你点它时挥手；到点还会主动开口提醒你起身。<br>10 秒无声演示 / A 10-second silent demo.</sub></p>
+
 </div>
 
-<p align="center">
-  <img src="docs/images/dashboard.png" width="920" alt="Morrow dashboard with an active scenario, a pending reminder and today's progress">
-</p>
-<p align="center"><sub><b>仪表盘 / Dashboard</b> · 当前计划、待处理提醒、今日进度与下一次触发，一屏读完。</sub></p>
+<a id="download"></a>
+## 下载 / Download
+
+| 平台 / Platform | 安装包 / Installer | 说明 / Notes |
+|---|---|---|
+| macOS 11+ | [最新版 .dmg](https://github.com/Benny66/morrow/releases/latest) | Universal（Apple Silicon + Intel） |
+| Windows 10/11 | [最新版 .exe](https://github.com/Benny66/morrow/releases/latest) | NSIS 安装器 |
+
+无账号、无云同步；提醒、打卡、统计与久坐数据都留在本机。
+
+> **macOS 首次打开 / First launch on macOS**：安装包尚未做 Apple 公证（notarization）。若系统提示「已损坏，无法打开」，请右键 App →「打开」，或执行
+> `xattr -dr com.apple.quarantine /Applications/Morrow.app`。
+> 这不是安装包损坏，而是 Gatekeeper 对未公证应用的默认拦截；正式分发需要 Apple Developer ID 与 notarization。
 
 <a id="why-morrow"></a>
 ## 为什么 Morrow / Why Morrow
@@ -128,12 +152,24 @@
 - **强提醒 / Strong alert**：到点在全屏遮罩上展示待处理卡片，覆盖所有显示器；主屏显示完整操作，副屏显示简化卡片。桌宠与遮罩默认排除出屏幕捕获。
 - **其他 / Other**：静默时段（默认 22:00–08:00）、系统通知、开机自启、唤起主窗与演示模式全局快捷键、明暗主题、数据库导出与恢复。
 
+<p align="center">
+  <img src="docs/images/pet-reminder.gif" width="400" alt="Completing a reminder from the desktop pet bubble, after which the pet celebrates">
+</p>
+<p align="center"><sub>点气泡里的「完成」即可处理提醒，不必打开主窗口；清空待处理后小满会跳一下。</sub></p>
+
 ### 本地优先 / Local-first
 
 SQLite 本地落盘，无账号体系。只有主动使用 AI 功能时才访问你配置的端点；其余能力全部离线可用。
 
 <a id="screenshots"></a>
 ## 界面 / Screenshots
+
+### 仪表盘 / Dashboard
+
+<p align="center">
+  <img src="docs/images/dashboard.png" width="920" alt="Morrow dashboard with an active scenario, a pending reminder and today's progress">
+</p>
+<p align="center"><sub>当前计划、待处理提醒、今日进度与下一次触发，一屏读完。</sub></p>
 
 ### 场景模板库 / Template library
 
@@ -163,7 +199,9 @@ SQLite 本地落盘，无账号体系。只有主动使用 AI 功能时才访问
 AI 只负责生成一次，之后完全本地可控：模板副本与 AI 计划都落在同一张计划页里，可编辑、停用、删除，也可以随时手动新增一条。
 
 <a id="quick-start"></a>
-## 快速开始 / Quick Start
+## 源码构建 / Build from source
+
+> 只想使用？直接下载[上方安装包](#download)。以下步骤只用于开发与贡献。
 
 ### 环境要求 / Prerequisites
 
@@ -306,3 +344,7 @@ bash scripts/dev-signing-cert.sh
 | [`AGENTS.md`](AGENTS.md) | 跨端架构铁律 |
 
 提交前请阅读 `AGENTS.md`，并确保 `make test` 与 `make lint` 通过。
+
+## 许可证 / License
+
+[MIT](LICENSE) © 2026 Benny66
