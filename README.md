@@ -50,7 +50,7 @@ Morrow reminds you to drink, stand, move and look away — 小满, a small water
 | macOS 11+ | [最新版 .dmg](https://github.com/Benny66/morrow/releases/latest) | Universal（Apple Silicon + Intel） |
 | Windows 10/11 | [最新版 .exe](https://github.com/Benny66/morrow/releases/latest) | NSIS 安装器 |
 
-无账号、无云同步；提醒、打卡、统计与久坐数据都留在本机。
+无账号、无云同步；提醒、打卡、统计与久坐数据都留在本机。应用会在启动后自动检查新版本（只读 GitHub Releases 的版本元数据，不上传数据；可在设置里关闭）。
 
 > **macOS 首次打开 / First launch on macOS**：安装包尚未做 Apple 公证（notarization）。若系统提示「已损坏，无法打开」，请右键 App →「打开」，或执行
 > `xattr -dr com.apple.quarantine /Applications/Morrow.app`。
@@ -295,7 +295,7 @@ frontend/src/lib/           # 事件、错误码、分页、提醒与模板的�
 - **应用画像显式同意 / Explicit app-profile consent**：首次引导或升级卡里明确选择；拒绝时降级为基础久坐检测。画像数据全量只存本机，可查看、纠正类别、关闭、清空；导出时默认包含，可取消勾选，取消后的备份不含应用/久坐明细。
 - **不使用摄像头 / No camera**：判断「人是否在电脑前」只依赖系统空闲时长与前台应用身份。
 - **演示模式不猜内容 / No content guessing**：只依据前台应用身份、全屏几何与你的主动操作；不分析屏幕、不读窗口标题。
-- **不上传 / No upload**：所有数据留在本机；AI 只是可选的一次性调用，只发送你主动输入的场景描述或文本。场景模板、久坐文案与记忆模板完全本地生成，不发起任何网络请求。
+- **不上传 / No upload**：所有数据留在本机；AI 只是可选的一次性调用，只发送你主动输入的场景描述或文本。场景模板、久坐文案与记忆模板完全本地生成。唯一的自动网络请求是「检查更新」：只读取 GitHub Releases 的版本元数据，不上传任何数据，可在设置里关闭（见 `docs/adr/0013-update-check-network-boundary.md`）。
 - **可关闭、可降级 / Off by default where it matters**：六路免打扰信号逐项可关；应用画像默认不开启；权限被拒绝或平台不支持时对应能力明确降级，其余功能照常工作。
 
 ## 构建与发布 / Build & Release

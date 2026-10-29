@@ -1795,3 +1795,50 @@ func TestCloseWithoutTrayExitsCleanly(t *testing.T) {
 			"trayRunning 将恒为 false、永远走「放行退出」分支（永不隐藏）。")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 护栏 21：更新检查必须真的被启动/停止，绑定方法不得缺失
+//
+// 自动检查更新没被 ServiceStartup 启动时没有任何症状：应用照常运行、日志干净，
+// 只是永远收不到新版本提示。按铁律 5，把这条接线编译成会红的检查。
+// ---------------------------------------------------------------------------
+
+func TestUpdateCheckerWired(t *testing.T) {
+	files, err := parseDir(projectRoot())
+	if err != nil {
+		t.Fatalf("解析项目根目录失败: %v", err)
+	}
+	app, ok := files["app.go"]
+	if !ok {
+		t.Fatal("护栏找不到 app.go——写法可能已变更，请同步更新护栏解析规则")
+	}
+
+	startup := findMethodDecl(app, "ServiceStartup")
+	if startup == nil {
+		t.Fatal("app.go 中找不到 ServiceStartup——方法被改名/移动，护栏已瞎，请同步更新解析规则")
+	}
+	if !containsCallNamed(startup.Body, "startUpdateChecker") {
+		t.Error("ServiceStartup 没有调用 startUpdateChecker：\n" +
+			"  自动检查更新永远不会启动，用户停在旧版本也收不到提示，且没有任何报错。")
+	}
+
+	shutdown := findMethodDecl(app, "ServiceShutdown")
+	if shutdown == nil {
+		t.Fatal("app.go 中找不到 ServiceShutdown——方法被改名/移动，护栏已瞎，请同步更新解析规则")
+	}
+	if !containsCallNamed(shutdown.Body, "stopUpdateChecker") {
+		t.Error("ServiceShutdown 没有调用 stopUpdateChecker：检查 goroutine 会在关闭过程中继续跑。")
+	}
+
+	for _, name := range []string{
+		"GetUpdateState",
+		"CheckForUpdates",
+		"SetUpdateCheckEnabled",
+		"SkipUpdateVersion",
+		"OpenUpdatePage",
+	} {
+		if findMethodDecl(app, name) == nil {
+			t.Errorf("app.go 缺少绑定方法 %s——设置页/宠物气泡的更新链路会静默断掉", name)
+		}
+	}
+}

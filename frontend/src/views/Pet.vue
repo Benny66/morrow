@@ -25,13 +25,16 @@ import {
   GetPetSprite,
   GetRestModeSnapshot,
   GetSitSnapshot,
+  GetUpdateState,
   ListPendingFires,
   MuteSitToday,
   OpenMainWindow,
+  OpenUpdatePage,
   SetPetBubbleHeight,
   SetPetBubbleVisible,
   SetPresentationMode,
   SetSitTone,
+  SkipUpdateVersion,
   SnoozeReminder,
   SnoozeSitNudge,
   TakeActiveBreak,
@@ -81,6 +84,9 @@ type PendingFire = NonNullable<Awaited<ReturnType<typeof ListPendingFires>>>[num
 type SitSnapshotData = Awaited<ReturnType<typeof GetSitSnapshot>>
 type SitBubbleData = NonNullable<SitSnapshotData['bubble']>
 
+/** 更新状态同样由绑定类型反推；M1 只读，不下载安装。 */
+type UpdateStateData = Awaited<ReturnType<typeof GetUpdateState>>
+
 // ---- 渲染状态 ----
 
 /** 精灵图缩放倍数（0.5–2.0，由设置页控制）。 */
@@ -128,6 +134,8 @@ const restSnap = ref<RestModeSnapshot | null>(null)
 
 /** 宠物窗口 4 秒轮询的久坐快照；null 表示尚未拉到。 */
 const sitSnapshot = ref<SitSnapshotData | null>(null)
+/** 更新检查状态（4 秒轮询；自动检查在 Go 侧，前端只负责显示）。 */
+const updateState = ref<UpdateStateData | null>(null)
 /**
  * 已确认展示的气泡本地钉住到 TTL 结束。
  *
@@ -470,6 +478,20 @@ const sitBubbleVisible = computed(
     // 「今天先这样」只压软提醒/记忆；动作确认与欢迎回来仍可见。
     (!sitSnapshot.value?.muted_today ||
       sitBubble.value?.kind === SitBubbleKindEnum.BubbleGreeting),
+)
+
+/**
+ * 更新提示是否可见：气泡链的最后一支，永不压过任何提醒与休息流程。
+ *
+ * 模板顺序本身就是优先级（所有 v-else-if 都在它前面）。这里只排除三件事：
+ * 已忽略该版本、今天先这样、贴边收起——收起态窗口只有一条窄边，冒气泡会被裁掉。
+ */
+const updateBubbleVisible = computed(
+  () =>
+    !!updateState.value?.available &&
+    !updateState.value.skipped &&
+    !sitSnapshot.value?.muted_today &&
+    dockSide.value === '',
 )
 
 /** 情绪只在待机时露出来；等待/庆祝/休息陪做优先。 */
@@ -1157,6 +1179,34 @@ async function syncSettings(): Promise<void> {
   }
 }
 
+/** 拉取更新状态；失败保持上一轮，避免气泡突然消失。 */
+async function syncUpdateState(): Promise<void> {
+  try {
+    updateState.value = await invoke(() => GetUpdateState(), 'GetUpdateState')
+  } catch (e) {
+    logWarn('读取更新状态失败', { err: String(e) })
+  }
+}
+
+/** 打开更新发布页（URL 由 Go 侧提供，前端不拼）。 */
+function openUpdatePage(): void {
+  invoke(() => OpenUpdatePage(), 'OpenUpdatePage').catch((e) => {
+    logWarn('打开更新页面失败', e)
+  })
+}
+
+/** 忽略当前新版本：只收气泡，设置页仍提示可更新。 */
+async function ignoreUpdateVersion(): Promise<void> {
+  const version = updateState.value?.latest
+  if (!version) return
+  try {
+    await invoke(() => SkipUpdateVersion(version), 'SkipUpdateVersion')
+    await syncUpdateState()
+  } catch (e) {
+    logWarn('忽略更新版本失败', { err: String(e) })
+  }
+}
+
 /** 轮询设置、生长档位、暂停状态与休息模式（失败只记一条 warn，下一轮再试）。 */
 async function pollSettings(): Promise<void> {
   try {
@@ -1170,6 +1220,7 @@ async function pollSettings(): Promise<void> {
   await syncInterruptionState()
   await syncRestModeState()
   await syncSitState()
+  await syncUpdateState()
   // 4 秒一次的兜底：原生窗口显隐、引擎差异都可能让观察器漏事件。
   // 有气泡时重报一次；Go 侧对相同尺寸是幂等的，不会反复 resize。
   if (bubbleRef.value) void applyBubbleFit()
@@ -1208,6 +1259,7 @@ onMounted(async () => {
   await refreshPending()
   await syncGrowth()
   await syncSitState()
+  await syncUpdateState()
   logInfo('宠物窗口已就绪', { pack: packID.value, mode: mode.value, scale: scale.value })
 
   pollTimer = window.setInterval(() => {
@@ -1357,6 +1409,17 @@ onUnmounted(() => {
         <button class="bubble__btn" :disabled="sitBusy" @click="openMainWindow">
           打开客户端
         </button>
+      </div>
+    </div>
+
+    <!-- 更新提示：气泡链的最后一支（最低优先级），只有前面所有分支都不成立时才出现。
+         只提示，不下载；「查看」跳转发布页，「忽略此版本」只收气泡，设置页仍提示。 -->
+    <div v-else-if="updateBubbleVisible && updateState" ref="bubbleRef" class="bubble bubble--update">
+      <p class="bubble__title">有新版本 v{{ updateState.latest }}</p>
+      <p class="bubble__text">当前 v{{ updateState.current }}，要去发布页看看吗？</p>
+      <div class="bubble__actions">
+        <button class="bubble__btn bubble__btn--primary" @click="openUpdatePage">查看</button>
+        <button class="bubble__btn" @click="ignoreUpdateVersion">忽略此版本</button>
       </div>
     </div>
 
