@@ -83,6 +83,16 @@ jobs:
         with:
           node-version: '22'
 
+      # Linux 腿需要 GTK4 / WebKitGTK 6.0 的开发包：wails3 CLI 自身的编译、
+      # 绑定生成与 cgo 编译都依赖 pkg-config 能找到它们。只装开发包，不打包、不运行。
+      # 【必须在 Install wails3 CLI 之前】CLI 会编译到 application 包，缺头文件会先炸。
+      - name: Install Linux deps (GTK4 + WebKitGTK 6.0)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+
       # 装 wails3 CLI。版本【取自 go.mod】而不是写死：CLI 与依赖库必须同版本，
       # 写死会出现「go.mod 升了、CI 还在用旧 CLI」的静默错配——症状是 CI 的构建
       # 方式与本地不一致，而两边都「成功」。go.mod 是 wails 版本的唯一真相。
@@ -99,15 +109,6 @@ jobs:
       - name: Install frontend deps
         shell: bash
         run: cd frontend && npm install
-
-      # Linux 腿需要 GTK4 / WebKitGTK 6.0 的开发包：wails3 生成绑定与 cgo 编译
-      # 都依赖 pkg-config 能找到它们。只装开发包，不打包、不运行。
-      - name: Install Linux deps (GTK4 + WebKitGTK 6.0)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
 
       - name: Build
         shell: bash
