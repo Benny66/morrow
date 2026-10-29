@@ -96,7 +96,7 @@ func main() {
 
 	// MCP 鉴权透传：配置了 token 且以 WAILS_MCP=1 启动时，把它交给运行时 MCP。
 	// 【必须在 application.New 之前】：MCP server 在框架启动流程里读环境变量
-	// （beta.23 mcp_enabled.go 的 startMCPServer → WAILS_MCP_TOKEN），跑起来再设无效。
+	// （v3.0.0 mcp_enabled.go 的 startMCPServer → WAILS_MCP_TOKEN），跑起来再设无效。
 	// 配置为空 = 不加鉴权（MCP 仅 -tags mcp 构建存在，loopback 是默认绑定面，
 	// 见 openspec/changes/builtin-toolkit/design.md D7；生产构建无 MCP 由护栏 17 把关）。
 	if os.Getenv("WAILS_MCP") == "1" && cfg.MCPToken != "" {
@@ -343,7 +343,7 @@ func main() {
 	// Cancel() 后框架立即返回，默认动作（销毁窗口）被拦下；而 listeners 是在 goroutine
 	// 里各跑各的（框架自己在 Common.WindowClosing 上就挂了一个销毁 listener，见
 	// webview_window.go），抢不过默认动作——写错了不会报错，只是窗口照常销毁。
-	// （已对着 beta.23 的 HandleWindowEvent 实现核实。）
+	// （已对着 v3.0.0 的 HandleWindowEvent 实现核实。）
 	//
 	// 【R1/R3】托盘在 → Hide() + Cancel()：窗口保留、页面状态不丢、进程驻留；
 	// 托盘没起来 → 拦下默认动作并【显式 Quit()】：既退出又不残留无窗口进程。

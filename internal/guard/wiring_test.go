@@ -633,7 +633,7 @@ func findCompositeLiteralIn(f *ast.File, pkg, typeName string) *ast.CompositeLit
 // 调 Go 方法的本机端口，界面上没有任何提示。属于「没有症状的失效」，只能靠护栏拦。
 //
 // 唯一受认可的启用方式是环境变量 WAILS_MCP=1（见 wails/v3 的 internal/commands/envTags）。
-// 注意这条通道的【边界】（v3 beta.23 实测）：只有 `wails3 build`（task_wrapper.go 的
+// 注意这条通道的【边界】（v3.0.0 实测）：只有 `wails3 build`（task_wrapper.go 的
 // Build()）与 `wails3 dev`（dev.go）读它；`wails3 package` 不读——Package() 只是
 // wrapTask("package", …)，不调用 envTags()。故 `WAILS_MCP=1 make package`/`make build`
 // 在 macOS（交付路径走 package）上会【静默】产出不含 MCP 的产物。见 design.md P13。

@@ -224,16 +224,16 @@ APPLESCRIPT
     fi
     ;;
   linux)
-    # webkit 版本标签：wails 默认按 webkit2gtk-4.0 做 cgo 链接，而 Ubuntu 24.04+ /
-    # Debian 13+ 只提供 4.1，需 -tags webkit2_41 才切过去（否则报找不到 webkit2gtk-4.0）。
-    # Ubuntu 22.04+ 两者都有，故该标签对在支持期内的发行版都成立。
+    # v3.0.0 起 Linux 默认栈是 GTK4 + WebKitGTK 6.0；旧 GTK3/WebKit2GTK 4.1
+    # 只剩 `-tags gtk3` 过渡通道（v3.1 移除），不再需要 webkit2_41。
+    # 目标发行版必须自备 GTK4 + WebKitGTK 6.0 运行库。
     #
     # Linux 的交付物就是裸二进制（见 build/linux/Taskfile.yml 的说明），
     # 故显式请求 build 动作——平台推断在 linux 上本来就是 build，写出来是为了自我说明。
     #
-    # Linux 不在 CI 的编译矩阵内（理由见 .github/workflows/build.yml），
-    # 此路径供本地打包使用，未经 CI 验证。
-    WAILS_ACTION=build bash scripts/build.sh -tags webkit2_41
+    # Linux 只进 CI 编译腿、不进发布矩阵（见 .github/workflows/build.yml），
+    # 运行态仍需在目标发行版上人工确认。
+    WAILS_ACTION=build bash scripts/build.sh
     echo "✓ 已生成: build/bin/${APP_NAME}"
     ;;
   windows)

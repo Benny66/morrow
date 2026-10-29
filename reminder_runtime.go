@@ -23,10 +23,11 @@ const (
 
 // reminderNotifier 把引擎的通知请求转成 Wails 系统通知。
 //
-// 【v3 beta.23 对通知按钮的支持情况（已对着该版本的源码核实）】
-//   - notifications.NotificationOptions 本身没有 actions 字段；
-//   - 但配套的 RegisterNotificationCategory + SendNotificationWithActions 支持
-//     自定义按钮，OnNotificationResponse 会把"用户点的是哪个按钮"回传过来。
+// 【v3.0.0 对通知按钮的支持情况（已对着该版本的源码核实）】
+//   - v3.0.0 的 NotificationOptions 已新增 Actions / HasReplyField 等字段；
+//   - 本仓仍走既有的 RegisterNotificationCategory + SendNotificationWithActions：
+//     分类模式在 macOS/Windows 可用，且与现有响应解析（OnNotificationResponse）
+//     一致，不在升级中切换发送路径。
 //
 // 故「完成 / 推迟」是可以直接做在通知上的，本类型就按这条路实现。
 //

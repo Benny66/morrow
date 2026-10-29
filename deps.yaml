@@ -13,8 +13,8 @@
 # ---- Go 直接依赖（go.mod 的 require，非 indirect） ----
 go:
   - module: github.com/wailsapp/wails/v3
-    version: v3.0.0-beta.23
-    reason: Wails v3 桌面应用框架。迁到 v3 的唯一理由是它内置 MCP 服务（运行时 MCP 让 Agent 能操作正在运行的应用做验收，v2 没有且不会回移）。版本钉死不用 @latest：beta 期 API 会动，升级必须是显式动作。
+    version: v3.0.0
+    reason: Wails v3 桌面应用框架（2026-10-26 发布的首个稳定版）。选它是因为内置 MCP 服务（运行时 MCP 让 Agent 能操作正在运行的应用做验收，v2 没有且不会回移）；v3.0.0 修复了 beta.30 及更早的跨域 iframe 安全公告。版本钉死不用 @latest：升级必须是显式动作。
 
   - module: gorm.io/gorm
     version: v1.31.2
@@ -47,6 +47,6 @@ frontend:
     reason: 组件库（功能底座：表格/表单/分页/弹窗），视觉由 tokens 重主题。
 
   - package: "@wailsio/runtime"
-    version: 3.0.0-beta.23
-    reason: Wails v3 的前端运行时（事件订阅 Events.On/Emit、日志、窗口控制）。取代 v2 由 wails 生成到 frontend/wailsjs/runtime 的运行时；它是 v3 绑定产物（frontend/bindings/**）的编译期依赖，故必须显式声明。版本与 Go 侧 wails/v3 保持一致。
+    version: 3.0.0
+    reason: Wails v3 的前端运行时（事件订阅 Events.On/Emit、日志、窗口控制）。取代 v2 由 wails 生成到 frontend/wailsjs/runtime 的运行时；它是 v3 绑定产物（frontend/bindings/**）的编译期依赖，故必须显式声明。稳定版起 npm 包版本恒等于 Wails 版本，仍与 Go 侧 wails/v3 保持一致。
 

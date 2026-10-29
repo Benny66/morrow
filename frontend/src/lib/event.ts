@@ -38,11 +38,11 @@
 /**
  * Wails 注入运行时的事件接口（只声明本模块用到的部分）。
  *
- * 【为什么不用 npm 的 @wailsio/runtime.Events】实测 beta.23 下，npm 包与 Wails
- * 注入的 `/wails/runtime.js` 是两份运行时实例、两张事件表；Go 的 Event.Emit
- * 走注入实例的 `window._wails.dispatchWailsEvent`，npm 实例上的 `Events.On`
- * 收不到任何事件——订阅静默成功、永远不触发。绑定调用（$Call）用 npm 实例没
- * 问题，事件必须走注入实例。这里用动态 import 取同一个实例，并用
+ * 【为什么不用 npm 的 @wailsio/runtime.Events】v3.0.0 下 npm 包与 Wails 注入的
+ * `/wails/runtime.js` 仍是两份运行时实例，各自持有模块私有的 eventListeners 表；
+ * Go 的 Event.Emit 只会派发到 `window._wails.dispatchWailsEvent` 指向的那一份。
+ * 在 npm 实例上订阅可能静默成功、永远不触发，故事件统一走注入实例；绑定调用
+ * （$Call）用 npm 实例没问题。这里用动态 import 取注入实例，并用
  * `@vite-ignore` 阻止 Vite 把它打进 bundle。
  */
 import { logWarn } from './log'

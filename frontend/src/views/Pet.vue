@@ -1642,7 +1642,7 @@ onUnmounted(() => {
 
 /* ---- 宠物本体 ----
    【为什么这里要显式写 --wails-draggable: drag，而不是靠从 .pet 继承】
-   拖拽判定在 wails 的注入脚本里（v3.0.0-beta.23 的
+   拖拽判定在 wails 的注入脚本里（v3.0.0 的
    internal/runtime/desktop/@wailsio/runtime/src/drag.ts），核心是：
 
      function isDraggableEvent(event) {

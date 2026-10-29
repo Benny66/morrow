@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.10'
 
       - uses: actions/setup-node@v4
         with:
@@ -57,28 +57,27 @@ jobs:
 
   # 编译矩阵（只编译，不启动 GUI）。
   #
-  # macOS + Windows 双平台编译；Windows 腿的步骤必须显式 shell: bash——
+  # macOS + Windows + Linux 三平台编译；Windows 腿的步骤必须显式 shell: bash——
   # runner 默认 PowerShell 会把 `set -euo pipefail` 当成 Set-Variable 参数。
   # 打包入口直接调 scripts/build.sh（make 在 Windows runner 上不保证存在），
   # 与本地 make build 共用同一个构建实现。
   #
-  # 刻意【不含 Linux】：Linux 产物要求系统装了哪个 webkit 版本（wails 默认找
-  # webkit2gtk-4.0，而 Ubuntu 24.04+/Debian 13+ 只有 4.1，需 -tags webkit2_41），
-  # 这类环境耦合让「编译通过」取决于 runner 镜像的包，维护成本高于收益。
-  # Linux 仍可本地打包（见 README 的打包说明），但不在 CI 的验证承诺内。
+  # Linux 只做【编译腿】：v3.0.0 默认 GTK4 + WebKitGTK 6.0，runner 上装对应
+  # 开发包即可编译；但 Linux 不在发布矩阵内（release.yml 只打包 macOS/Windows），
+  # 运行态仍需在目标发行版上人工确认。
   build:
     needs: check
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.10'
 
       - uses: actions/setup-node@v4
         with:
@@ -100,6 +99,15 @@ jobs:
       - name: Install frontend deps
         shell: bash
         run: cd frontend && npm install
+
+      # Linux 腿需要 GTK4 / WebKitGTK 6.0 的开发包：wails3 生成绑定与 cgo 编译
+      # 都依赖 pkg-config 能找到它们。只装开发包，不打包、不运行。
+      - name: Install Linux deps (GTK4 + WebKitGTK 6.0)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
 
       - name: Build
         shell: bash
