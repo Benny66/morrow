@@ -84,6 +84,7 @@
 | `scripts/smoke.sh` | 冒烟测试（构建 → 启动 → 断言 → 清理） |
 | `scripts/e2e-pet.sh` | 宠物页渲染验收（`make e2e-pet`）：起 vite + 无头浏览器，断言菜单能弹/四角不越界/菜单项文案，并给各状态截图（产物落 `build/e2e-pet/`，不入库；需 python3 + playwright） |
 | `scripts/e2e/` | 上面那条用的用例：`pet_menu.py`（菜单断言，失败即非零退出）、`mirror_logic.py`（在页面里 `import()` `lib/pet.ts`，断言镜像时序状态机）、`pet_states.py`（截图，含 0.5 倍真实尺寸，供人眼过） |
+| `frontend/scripts/check-entry-tla.mjs` | 产物护栏：入口 chunk 含顶层 await 会让打包版白屏（挂在 `npm run build` 之后） |
 | `build/darwin/` | macOS 打包资源（Info.plist、dmg 背景模板） |
 | `build/windows/` | Windows 打包资源（manifest、NSIS 脚本） |
 
