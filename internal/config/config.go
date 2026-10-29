@@ -225,6 +225,13 @@ type Config struct {
 	// PetPackID 选中的宠物包 ID（内置为 DefaultPetPackID）。
 	PetPackID string `json:"pet_pack_id"`
 
+	// UpdateCheckDisabled 关闭自动更新检查。默认 false 表示开启（见 ADR 0013）。
+	// 用 Disabled 而不是 Enabled：旧版 config.json 缺该键时零值必须落在「开启」。
+	UpdateCheckDisabled bool `json:"update_check_disabled"`
+	// SkippedUpdateVersion 用户明确忽略的更新版本（数字点分，无 v 前缀）；
+	// 空串表示未忽略。只影响宠物气泡，不影响设置页继续提示。
+	SkippedUpdateVersion string `json:"skipped_update_version"`
+
 	// path 是配置文件路径，不序列化（json:"-"）。
 	path string `json:"-"`
 }
@@ -735,5 +742,31 @@ func (c *Config) SavePetSettings(in PetSettings) error {
 	c.PetVisible = in.PetVisible
 	c.PetScale = scale
 	c.PetPackID = packID
+	return c.Save()
+}
+
+// ---------------------------------------------------------------------------
+// 更新检查（ADR 0013）
+// ---------------------------------------------------------------------------
+
+// UpdateCheckEnabled 返回自动更新检查是否开启（默认开启）。
+func (c *Config) UpdateCheckEnabled() bool {
+	return !c.UpdateCheckDisabled
+}
+
+// SetUpdateCheckEnabled 写入自动更新检查开关。
+func (c *Config) SetUpdateCheckEnabled(enabled bool) error {
+	c.UpdateCheckDisabled = !enabled
+	return c.Save()
+}
+
+// SkippedVersion 返回用户忽略的更新版本（空串 = 未忽略）。
+func (c *Config) SkippedVersion() string {
+	return strings.TrimSpace(c.SkippedUpdateVersion)
+}
+
+// SkipUpdateVersion 记录用户忽略的更新版本。
+func (c *Config) SkipUpdateVersion(version string) error {
+	c.SkippedUpdateVersion = strings.TrimSpace(version)
 	return c.Save()
 }

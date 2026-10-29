@@ -33,6 +33,7 @@ import (
 	"morrow/internal/sit"
 	"morrow/internal/systemprefs"
 	"morrow/internal/tray"
+	"morrow/internal/update"
 	// gen:import
 )
 
@@ -61,6 +62,13 @@ type App struct {
 	// notify 是官方通知服务实例（main.go 创建并注册进 Services，同包直接赋值）。
 	// 持有它而非每次现取：ServiceStartup 由框架回调，绑定方法只能靠这个引用触达。
 	notify *notifications.NotificationService
+	// updateMu 保护更新检查的运行期状态；检查 goroutine 与绑定调用共享。
+	updateMu      sync.Mutex
+	updateState   update.State
+	updateSkipped string
+	updateCancel  context.CancelFunc
+	// updateChecker 是 GitHub Releases 检查器；测试可替换为假实现。
+	updateChecker updateChecker
 	// shortcutAcc / presentationShortcutAcc 是【已注册到系统】的快捷键串，与配置里的
 	// 期望值分开——注册失败时二者允许短暂不一致。读写发生在绑定调用与 ServiceStartup
 	// 两个 goroutine，由 shortcutMu 串行化。
@@ -168,6 +176,12 @@ func NewApp(svc *service.Service, cfg *config.Config) *App {
 	// 启动前先把设置拷进内存快照：引擎与绑定方法随后都从快照读取，
 	// 避免它们在运行期各自去翻 *config.Config（那是并发读写的源头）。
 	app.syncSettingsFromConfig()
+	app.updateState = update.State{
+		AutoCheck: cfg.UpdateCheckEnabled(),
+		Current:   appinfo.Resolve(),
+	}
+	app.updateSkipped = cfg.SkippedVersion()
+	app.updateChecker = update.NewClient(update.DefaultRepo, "Morrow/"+appinfo.Resolve())
 	return app
 }
 
@@ -353,6 +367,9 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 	// 启动宠物贴边监测：轮询窗口位置，拖到屏幕边缘时自动收起。
 	// 放在最后，与提醒链路无依赖——它只读窗口位置。
 	a.startPetDockWatcher()
+
+	// 更新检查：延迟启动、失败只记日志，不参与启动成败（见 ADR 0013）。
+	a.startUpdateChecker()
 	return nil
 }
 
@@ -361,6 +378,9 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 // 框架保证：收到过 Startup 的服务必然收到 Shutdown（除非关闭过程 panic），
 // 且在 Options.OnShutdown 之后、按注册逆序调用。
 func (a *App) ServiceShutdown() error {
+	// 0.0 先停更新检查：它只读网络，但会与关闭过程争夺日志与状态。
+	a.stopUpdateChecker()
+
 	// 0. 先停提醒引擎：它会写数据库，必须在关库之前安静下来。
 	if a.engine != nil {
 		a.engine.Stop()
@@ -2675,6 +2695,195 @@ func (a *App) HideAlert() error {
 	}
 	for _, w := range wins {
 		w.Hide()
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 更新检查（M1：只检查与提示，不下载安装；见 ADR 0013）
+// ---------------------------------------------------------------------------
+
+// updateChecker 是 GitHub Releases 检查器的最小接口（测试可替换为假实现）。
+type updateChecker interface {
+	Latest(ctx context.Context) (*update.Release, error)
+}
+
+// startUpdateChecker 启动自动检查循环：启动 20 秒后首查，此后每 24 小时一次。
+//
+// 延迟到 20 秒是为了不和首屏启动争资源；循环本身永不阻断启动，失败只记日志。
+func (a *App) startUpdateChecker() {
+	a.updateMu.Lock()
+	if a.updateCancel != nil {
+		a.updateMu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.updateCancel = cancel
+	a.updateMu.Unlock()
+	go a.updateLoop(ctx)
+}
+
+func (a *App) stopUpdateChecker() {
+	a.updateMu.Lock()
+	cancel := a.updateCancel
+	a.updateCancel = nil
+	a.updateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (a *App) updateLoop(ctx context.Context) {
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return
+	}
+	a.runAutoUpdateCheck(ctx)
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.runAutoUpdateCheck(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (a *App) runAutoUpdateCheck(ctx context.Context) {
+	a.updateMu.Lock()
+	enabled := a.updateState.AutoCheck
+	a.updateMu.Unlock()
+	if !enabled {
+		return
+	}
+	state, err := a.runUpdateCheck(ctx, false)
+	if err != nil {
+		slog.Warn("自动检查更新失败", "err", err)
+		return
+	}
+	if state.Available && !state.Skipped {
+		slog.Info("发现新版本", "current", state.Current, "latest", state.Latest)
+	}
+}
+
+// runUpdateCheck 执行一次检查；manual 决定失败是变成用户可见错误还是只进日志。
+func (a *App) runUpdateCheck(ctx context.Context, manual bool) (update.State, error) {
+	current := appinfo.Resolve()
+	a.updateMu.Lock()
+	state := a.updateState
+	a.updateMu.Unlock()
+	state.Current = current
+
+	if _, ok := update.ParseVersion(current); !ok {
+		if manual {
+			return state, apperr.Validation("开发版本不检查更新")
+		}
+		return state, nil
+	}
+
+	release, err := a.updateChecker.Latest(ctx)
+	if err != nil {
+		if manual {
+			ae := apperr.Wrap(err)
+			ae.Message = "检查更新失败，请稍后重试"
+			return state, ae
+		}
+		return state, err
+	}
+
+	state.CheckedAt = time.Now().Unix()
+	state.Available = false
+	state.Latest = ""
+	state.Notes = ""
+	state.URL = ""
+	if release != nil && update.IsNewer(release.Version, current) {
+		state.Available = true
+		state.Latest = release.Version
+		state.Notes = release.Notes
+		state.URL = release.URL
+	}
+
+	a.updateMu.Lock()
+	state.AutoCheck = a.updateState.AutoCheck
+	state.Skipped = a.updateSkipped != "" && a.updateSkipped == state.Latest
+	a.updateState = state
+	a.updateMu.Unlock()
+	return state, nil
+}
+
+// GetUpdateState 返回当前更新状态（设置页与宠物轮询共用）。
+func (a *App) GetUpdateState() update.State {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	state := a.updateState
+	state.Current = appinfo.Resolve()
+	return state
+}
+
+// CheckForUpdates 手动检查一次；失败会返回用户可见错误（与自动检查相反）。
+func (a *App) CheckForUpdates() (update.State, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return a.runUpdateCheck(ctx, true)
+}
+
+// SetUpdateCheckEnabled 切换自动检查开关；重新开启时立刻补查一次。
+func (a *App) SetUpdateCheckEnabled(enabled bool) error {
+	if err := a.cfg.SetUpdateCheckEnabled(enabled); err != nil {
+		return apperr.Wrap(err)
+	}
+	a.updateMu.Lock()
+	a.updateState.AutoCheck = enabled
+	a.updateMu.Unlock()
+	if enabled {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			a.runAutoUpdateCheck(ctx)
+		}()
+	}
+	return nil
+}
+
+// SkipUpdateVersion 记住用户忽略的版本；只影响宠物气泡，设置页仍提示可更新。
+func (a *App) SkipUpdateVersion(version string) error {
+	v := strings.TrimSpace(version)
+	if _, ok := update.ParseVersion(v); !ok {
+		return apperr.Validation("版本号格式不正确")
+	}
+	if err := a.cfg.SkipUpdateVersion(v); err != nil {
+		return apperr.Wrap(err)
+	}
+	a.updateMu.Lock()
+	a.updateSkipped = v
+	if a.updateState.Latest == v {
+		a.updateState.Skipped = true
+	}
+	a.updateMu.Unlock()
+	return nil
+}
+
+// OpenUpdatePage 用系统默认浏览器打开发布页。
+//
+// URL 只来自检查结果，不接受前端传入，避免把绑定方法变成任意 URL opener。
+func (a *App) OpenUpdatePage() error {
+	a.updateMu.Lock()
+	releaseURL := a.updateState.URL
+	a.updateMu.Unlock()
+	if !strings.HasPrefix(releaseURL, "https://") {
+		return apperr.Validation("没有可打开的更新页面")
+	}
+	if a.app == nil {
+		return apperr.New(apperr.CodeInternal, "应用尚未就绪")
+	}
+	if err := a.app.Browser.OpenURL(releaseURL); err != nil {
+		return apperr.Wrap(err)
 	}
 	return nil
 }

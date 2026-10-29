@@ -354,3 +354,35 @@ func TestLoadOldConfigWithoutOnboardingField(t *testing.T) {
 		t.Fatal("旧配置缺 onboarding_completed 时应为 false")
 	}
 }
+
+// TestUpdateCheckConfig 更新检查默认开启；开关与忽略版本能落盘并重新加载。
+func TestUpdateCheckConfig(t *testing.T) {
+	isolateHome(t)
+	cfg, err := Load("Morrow")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.UpdateCheckEnabled() {
+		t.Fatal("自动更新检查默认应开启")
+	}
+	if got := cfg.SkippedVersion(); got != "" {
+		t.Fatalf("默认忽略版本应为空，得到 %q", got)
+	}
+	if err := cfg.SetUpdateCheckEnabled(false); err != nil {
+		t.Fatalf("SetUpdateCheckEnabled: %v", err)
+	}
+	if err := cfg.SkipUpdateVersion(" 1.2.3 "); err != nil {
+		t.Fatalf("SkipUpdateVersion: %v", err)
+	}
+
+	reloaded, err := Load("Morrow")
+	if err != nil {
+		t.Fatalf("重新 Load: %v", err)
+	}
+	if reloaded.UpdateCheckEnabled() {
+		t.Fatal("关闭后重新加载仍应为关闭")
+	}
+	if got := reloaded.SkippedVersion(); got != "1.2.3" {
+		t.Fatalf("忽略版本 = %q，期望 1.2.3", got)
+	}
+}

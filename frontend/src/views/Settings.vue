@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/app'
 // v3 的绑定路径见 stores/app.ts 的说明。
 import {
   ClearSitProfile,
+  CheckForUpdates,
   Confirm,
   ExportDatabase,
   GetAISettings,
@@ -23,11 +24,13 @@ import {
   GetReminderSettings,
   GetSitSettings,
   GetToggleWindowShortcut,
+  GetUpdateState,
   ImportDatabase,
   ImportPetPack,
   ListPetPacks,
   OpenDataDir,
   OpenPrivacySettings,
+  OpenUpdatePage,
   RequestCalendarAccess,
   RequestNotificationPermission,
   RequestFocusAccess,
@@ -46,6 +49,7 @@ import {
   SetSitProfileEnabled,
   SetSitSettings,
   SetToggleWindowShortcut,
+  SetUpdateCheckEnabled,
   TestAIConnection,
 } from '../../bindings/morrow/app.js'
 import { Tone as SitToneEnum } from '../../bindings/morrow/internal/sit/models.js'
@@ -67,6 +71,13 @@ function onThemeChange(mode: '' | 'dark' | 'light') {
 // 应用信息：版本/平台/路径。类型直接取自绑定返回值，避免手写镜像漂移。
 type AppInfo = Awaited<ReturnType<typeof GetAppInfo>>
 const info = ref<AppInfo | null>(null)
+
+/** 更新状态：M1 只检查与提示，不下载安装。 */
+type UpdateStateData = Awaited<ReturnType<typeof GetUpdateState>>
+const updateState = ref<UpdateStateData | null>(null)
+const updateAutoCheck = ref(true)
+const updateChecking = ref(false)
+const updateHint = ref('')
 const actionError = ref<AppError | null>(null)
 const exportHint = ref('')
 // 导出默认包含应用画像；取消后副本不含应用与久坐明细，CheckIn 保留。
@@ -834,6 +845,50 @@ function openSitPage(): void {
 
 // 双保险：AppInfo 已含数据目录，若它整条拿不到（极端情况），退回单独查。
 // 顺带拉起各设置项的初始状态。
+// ---- 更新检查（M1：只检查与提示） ----
+
+async function refreshUpdateState(): Promise<void> {
+  try {
+    const state = await invoke(() => GetUpdateState())
+    updateState.value = state
+    updateAutoCheck.value = state.auto_check
+  } catch (e) {
+    logWarn('读取更新状态失败', { err: String(e) })
+  }
+}
+
+async function checkUpdates(): Promise<void> {
+  updateChecking.value = true
+  updateHint.value = ''
+  try {
+    const state = await invoke(() => CheckForUpdates())
+    updateState.value = state
+    updateHint.value = state.available ? `发现新版本 v${state.latest}` : '已是最新版本'
+  } catch (e) {
+    updateHint.value = (e as AppError).message || '检查更新失败'
+  } finally {
+    updateChecking.value = false
+  }
+}
+
+async function onUpdateAutoChange(value: string | number | boolean): Promise<void> {
+  const enabled = value === true
+  try {
+    await invoke(() => SetUpdateCheckEnabled(enabled))
+    updateAutoCheck.value = enabled
+    updateHint.value = enabled ? '已开启自动检查' : '已关闭自动检查'
+  } catch (e) {
+    updateAutoCheck.value = !enabled
+    updateHint.value = (e as AppError).message || '保存失败'
+  }
+}
+
+function openUpdatePage(): void {
+  invoke(() => OpenUpdatePage()).catch((e) => {
+    logWarn('打开更新页面失败', e)
+  })
+}
+
 onMounted(async () => {
   try {
     info.value = await invoke(() => GetAppInfo())
@@ -845,6 +900,7 @@ onMounted(async () => {
       // 两次都失败：错误已记录，界面展示占位即可
     }
   }
+  await refreshUpdateState()
   try {
     shortcutInput.value = await invoke(() => GetToggleWindowShortcut())
   } catch {
@@ -919,7 +975,21 @@ onUnmounted(() => {
     <div class="setting">
       <span class="setting__label">版本</span>
       <span class="setting__path">{{ info?.version || '—' }}</span>
-      <span class="setting__muted">{{ info?.platform || '' }}</span>
+      <span v-if="updateState?.available" class="setting__muted">→ 最新 v{{ updateState.latest }}</span>
+      <span v-else class="setting__muted">{{ info?.platform || '' }}</span>
+      <button class="setting__btn" :disabled="updateChecking" @click="checkUpdates">
+        {{ updateChecking ? '检查中…' : '检查更新' }}
+      </button>
+      <button v-if="updateState?.available" class="setting__btn" @click="openUpdatePage">
+        下载
+      </button>
+      <span v-if="updateHint" class="setting__muted">{{ updateHint }}</span>
+    </div>
+
+    <div class="setting">
+      <span class="setting__label">自动检查更新</span>
+      <el-switch v-model="updateAutoCheck" @change="onUpdateAutoChange" />
+      <span class="setting__muted">只访问 GitHub Releases，不上传任何数据</span>
     </div>
 
     <div class="setting">
