@@ -59,7 +59,7 @@ func petWindowSize(scale float64) (width, height int) {
 
 // petWindowOptions 组装宠物窗口的创建参数。
 //
-// 【字段选择说明】（对着 wails v3.0.0-beta.23 的 WebviewWindowOptions 逐条核对）：
+// 【字段选择说明】（对着 wails v3.0.0 的 WebviewWindowOptions 逐条核对）：
 //   - Frameless：无边框。与主窗不同，这里恒为 true——宠物不需要标题栏，
 //     也不需要 macOS 交通灯（主窗必须 false 才能留住交通灯，见 main.go）。
 //   - AlwaysOnTop：宠物要浮在所有窗口之上，否则切到别的应用就"消失"了。

@@ -37,7 +37,7 @@
 # 用法：bash scripts/build.sh [wails3 的其余参数...]
 #   bash scripts/build.sh                          # 等价 make build
 #   bash scripts/build.sh GOOS=windows ARCH=amd64  # 交叉编译（v2 是 -platform windows/amd64）
-#   bash scripts/build.sh -tags webkit2_41         # Linux：只有 4.1 版 WebKitGTK 时
+#   bash scripts/build.sh -tags gtk3              # Linux：目标发行版只有 GTK3/WebKit2GTK 4.1 时（v3.0.x 过渡通道）
 #   bash scripts/build.sh OBFUSCATED=true          # garble 混淆（macOS 经 package，故用变量）
 #
 # 环境变量 WAILS_ACTION 可显式覆盖动作（默认按目标平台推断）：
@@ -127,7 +127,7 @@ esac
 # 不加这个 tag 的症状极具迷惑性：窗口配置看着完全正确、CSS 也写了 transparent，
 # 屏幕上却是一块不透明的底色——因为 webview 自己的绘制背景没被关掉。
 #
-# 只对 darwin 注入；用户显式给了 EXTRA_TAGS 时尊重用户，否则会把 webkit2_41
+# 只对 darwin 注入；用户显式给了 EXTRA_TAGS 时尊重用户，否则会把 gtk3
 # 这类平台标签覆盖掉。
 if [ "$TARGET_GOOS" = "darwin" ] && [ -z "${EXTRA_TAGS:-}" ]; then
   EXTRA_TAGS="private_mac_apis"

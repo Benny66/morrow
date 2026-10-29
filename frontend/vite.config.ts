@@ -20,7 +20,7 @@ export default defineConfig({
     // 502，而它写的是 localhost，看不出是协议族的问题。
     //
     // 上游模板（internal/templates/**、examples/**）同样没设 host，属于
-    // v3.0.0-beta.23 + Vite 7 的缺口，不是本仓配错。
+    // v3.0.0 + Vite 7 的缺口，不是本仓配错。
     // 这条契约由 internal/guard/wiring_test.go 的护栏 15 兜住（漏了没有任何症状）。
     host: '127.0.0.1',
   },

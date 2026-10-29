@@ -5,7 +5,7 @@
 #   1. 删掉 AppImage / deb / rpm / AUR 任务：本项目在 Linux 上只提供裸二进制
 #      （与 v2 时代的做法一致，见 README 的打包说明）。要发 deb/rpm 时再引入
 #      nfpm 配置，而不是先摆好一套没人跑的打包链。
-#   2. 删掉 Docker 交叉编译：Linux 产物强依赖宿主机的 WebKit 版本，
+#   2. 删掉 Docker 交叉编译：Linux 产物强依赖宿主机的 GTK / WebKit 版本，
 #      「在容器里编出来能跑」本身就是个假承诺（详见 .github/workflows/build.yml）。
 # ==========================================================================
 version: '3'
@@ -28,10 +28,15 @@ tasks:
             ref: .OBFUSCATED
       - task: common:generate:icons
     preconditions:
-      # webkit 开发头文件是 cgo 链接的硬要求，缺了会在编译末期报一堆找不到
-      # webkit2gtk-4.0 的错，看不出是「没装系统依赖」。
-      - sh: 'command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1 || pkg-config --exists webkit2gtk-4.0'
-        msg: "缺少 WebKitGTK 开发包。Ubuntu/Debian: sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev（Ubuntu 24.04+ 只有 4.1，需同时传 EXTRA_TAGS=webkit2_41）"
+      # v3.0.0 默认 GTK4 + WebKitGTK 6.0；显式传 gtk3 时回退到旧栈。
+      # 缺头文件会在编译末期报一堆找不到 webkit 的错，看不出是「没装系统依赖」。
+      - sh: |
+          if printf '%s' ' {{.EXTRA_TAGS}} ' | grep -q ' gtk3 '; then
+            pkg-config --exists gtk+-3.0 webkit2gtk-4.1
+          else
+            pkg-config --exists gtk4 webkitgtk-6.0
+          fi
+        msg: "缺少 GTK4/WebKitGTK 6.0 开发包。Ubuntu/Debian: sudo apt install libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev；只有 GTK3 的发行版请传 EXTRA_TAGS=gtk3 并安装 libgtk-3-dev libwebkit2gtk-4.1-dev"
     cmds:
       # 先删产物再编译：`go build -o` 会拒绝覆盖【不是它自己产出】的既有文件。
       # 三平台写法一致，免得「哪条路径会撞上」又要靠记忆。详见 darwin Taskfile 的同名注释。

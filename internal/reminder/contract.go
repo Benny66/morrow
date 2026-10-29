@@ -144,7 +144,7 @@ func (f DueFire) NotificationID() string {
 
 // DefaultNotificationTitle 是通知标题的最终兜底。
 //
-// 【为什么必须有】上游 notifications 的 validateNotificationOptions（beta.23）对
+// 【为什么必须有】上游 notifications 的 validateNotificationOptions（v3.0.0）对
 // Title == "" 直接返回 error——整条通知发不出去，只在日志里留一条 warn。
 // 一条数据异常（场景名与提醒标题同时被清空）不该升级成"用户永远收不到这条提醒"，
 // 故这里兜一个常量，让通知仍然能送达。取「提醒」而不是别的词，是为了与

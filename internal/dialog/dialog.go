@@ -39,10 +39,10 @@ func SelectDirectory(app *application.App, title string) (string, error) {
 
 // SelectSaveFile 打开"保存文件"对话框，返回目标路径（取消返回空串）。
 //
-// 这里用 SetOptions 而不是链式 SetTitle，是 beta.23 的一处框架缺口：
+// 这里用 SetOptions 而不是链式 SetTitle，是 v3.0.0 的一处框架缺口：
 // SaveFileDialogOptions 结构体【有】Title 字段，Windows 实现也确实消费它
 // （dialogs_windows.go 拿它做对话框标题），但 SaveFileDialogStruct【没暴露 SetTitle】
-// ——OpenFileDialogStruct 有 SetTitle，只有保存对话框漏了。故只能整体赋值。
+// ——OpenFileDialogStruct 与 MessageDialog 都有，只有保存对话框漏了。故只能整体赋值。
 //
 // 【SetOptions 是整体赋值，不是增量】：它把 Title/Message/Directory/Filename/ButtonText/
 // Filters/Window 全部按传入值覆盖。新增字段时若仍走这条路，必须一并带上，否则会被静默清空。
