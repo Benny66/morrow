@@ -82,6 +82,7 @@
 | `scripts/package.sh` | 打包（dmg / NSIS 安装器） |
 | `scripts/release.sh` | 版本号 + 打包 + release 说明 |
 | `scripts/smoke.sh` | 冒烟测试（构建 → 启动 → 断言 → 清理） |
+| `frontend/scripts/check-entry-tla.mjs` | 产物护栏：入口 chunk 含顶层 await 会让打包版白屏（挂在 `npm run build` 之后） |
 | `build/darwin/` | macOS 打包资源（Info.plist、dmg 背景模板） |
 | `build/windows/` | Windows 打包资源（manifest、NSIS 脚本） |
 
