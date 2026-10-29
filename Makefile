@@ -19,12 +19,16 @@ EXTRA_TAGS ?= private_mac_apis
 # 递归展开只在使用到它的 recipe 里求值，那时 require-dist 前置检查已通过。
 GO_PKGS = $(shell go list ./... | grep -v node_modules)
 
-.PHONY: help dev dev-mcp build test lint smoke package install gen icon verify-gen require-dist
+.PHONY: help dev dev-mcp build test lint smoke e2e-pet package install gen icon verify-gen require-dist
 
+# 【目标名必须允许数字】`e2e-pet` 里有 2，早先的字符类是 `[a-zA-Z_-]`，
+# 于是它明明有 ## 说明却永远不出现在 make help 里（没有任何报错）。加上 0-9。
+# 【不能用 `.*?`】懒惰量词是 PCRE 的，macOS 自带 BSD grep 报
+# `repetition-operator operand invalid`，整个 help 会退化成一行错误信息。
 help: ## 列出所有命令及用途
 	@echo "可用命令："
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*## "}; {printf "  make %-12s %s\n", $$1, $$2}'
 
 dev: ## 启动开发态（wails3 dev，含前端热更新）
 	EXTRA_TAGS=$(EXTRA_TAGS) $(WAILS) dev
@@ -79,6 +83,19 @@ lint: require-dist ## 静态检查（gofmt + Go 护栏 + go vet + 前端 ESLint 
 
 smoke: ## 冒烟测试（构建 → 启动 → 断言 → 清理）
 	bash scripts/smoke.sh
+
+# 宠物页的渲染层验收：起 vite dev + 无头浏览器，断言菜单能弹、四角不越界、菜单项文本对得上，
+# 并把各状态（微动作/打盹/惊醒/神态）各截一张图。
+#
+# 【为什么不并进 test】它需要 python3 + playwright + 浏览器，是"本地验收工具"而非构建依赖；
+# 并进去会让 `make test` 在没有这套环境的机器上直接红。故单独一个 target，
+# 前置依赖缺失时显式失败并给出安装命令（见 scripts/e2e-pet.sh 头部）。
+#
+# 【它补的是哪一块】`.pet` 是 overflow:hidden、窗口只有 240×380、可点元素还要排除拖拽——
+# 这类"渲染出来才看得见"的问题 go test / vue-tsc 都测不到。系统原生菜单与 wails 拖拽
+# 命中测试仍只能在真机确认，见 openspec/changes/pet-context-menu/tasks.md 的手测项。
+e2e-pet: ## 宠物页渲染验收（菜单交互断言 + 各状态截图，需 python3 + playwright）
+	bash scripts/e2e-pet.sh
 
 package: ## 打包真安装包（make package os=windows|macos|linux [scope=user|machine]）
 	bash scripts/package.sh $(os) $(scope)

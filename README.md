@@ -6,7 +6,7 @@
 
 <p><strong>A local-first wellness app, carried by a desktop pet.</strong><br>
 Morrow reminds you to drink, stand, move and look away — 小满, a small water-drop pet with a sprout on its head, delivers the message and grows with your daily progress.<br>
-<sub>本地优先的桌面健康提醒应用。提醒由一只叫「小满」的桌面宠物承载：一滴水，头顶一株芽，芽随今日完成率生长。</sub></p>
+<sub>本地优先的桌面健康提醒应用。提醒由一只叫「小满」的桌面宠物承载：一滴水，头顶一株芽，芽随坚持的天数生长。</sub></p>
 
 <p>
   <a href="https://github.com/Benny66/morrow/releases/latest"><img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
@@ -60,7 +60,7 @@ Morrow reminds you to drink, stand, move and look away — 小满, a small water
 ## 为什么 Morrow / Why Morrow
 
 - **本地优先 / Local-first**：SQLite 本地落盘，无账号、无云同步；提醒、打卡与统计全部留在本机。AI 只在主动使用相关功能时调用你配置的端点。
-- **宠物承载 / Carried by a pet**：不是又一个计时器。小满默认是**毒舌健康搭子**，在桌面上陪你完成每一次喝水、起身与远眺；也能根据连续用机与行为类别，在合适的时候开口（或闭嘴），芽随今日完成率生长。
+- **宠物承载 / Carried by a pet**：不是又一个计时器。小满默认是**毒舌健康搭子**，在桌面上陪你完成每一次喝水、起身与远眺；也能根据连续用机与行为类别，在合适的时候开口（或闭嘴），芽随坚持的天数生长。
 - **零配置起步 / Zero-config start**：内置 5 个场景模板，干净安装后四步就能得到一套可编辑、可启用的计划。AI 是可选的自定义入口，不是前置条件。
 - **日常保健边界 / General wellness, not medical advice**：只覆盖喝水、起身、走动、用眼放松、如厕等办公日常；不做疾病诊断、用药或医疗建议。
 
@@ -147,7 +147,7 @@ Morrow reminds you to drink, stand, move and look away — 小满, a small water
 
 ### 桌面与系统集成 / Desktop & System Integration
 
-- **桌面宠物 / Desktop pet**：透明置顶小窗常驻桌面。待处理时进入等待、清空后庆祝、休息时陪做；芽按今日完成率分五档生长；支持缩放、隐藏与导入素材包。
+- **桌面宠物 / Desktop pet**：透明置顶小窗常驻桌面。待处理时进入等待、清空后庆祝、休息时陪做；芽的形态按「累计完成天数」分五档、跨天不回退，今日完成率只影响神态；空闲时会有张望/伸懒腰这类小动作，离开久了会打盹、回来先"惊一下"。右键宠物可换形象、调缩放、今天先这样、打开主窗或隐藏；支持导入素材包。
 - **菜单栏 / Menu bar**：显示今日完成/目标、下一条提醒时间、待处理数量，以及暂停或休息原因；提供「打开主窗」「查看待处理」「进入/退出演示模式」「退出」。
 - **强提醒 / Strong alert**：到点在全屏遮罩上展示待处理卡片，覆盖所有显示器；主屏显示完整操作，副屏显示简化卡片。桌宠与遮罩默认排除出屏幕捕获。
 - **其他 / Other**：静默时段（默认 22:00–08:00）、系统通知、开机自启、唤起主窗与演示模式全局快捷键、明暗主题、数据库导出与恢复。

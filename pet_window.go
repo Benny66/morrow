@@ -148,20 +148,64 @@ func petRestorePosition(app *application.App, cfg *config.Config) (int, int) {
 		return x, y
 	}
 
+	if petPositionVisible(app, x, y, width, height) {
+		return x, y
+	}
+	if fx, fy, ok := petPrimaryBottomRight(app, width, height); ok {
+		return fx, fy
+	}
+	return x, y
+}
+
+// petPositionVisible 报告窗口矩形是否仍有至少 petPositionMinVisible 露出在任一屏幕工作区。
+//
+// 【为什么只要求露出一个角】跨两块屏摆放（一半在左屏一半在右屏）是正常用法；
+// 要求整窗可见会把它误判成不可见，然后强行拖回主屏。
+func petPositionVisible(app *application.App, x, y, width, height int) bool {
+	if app == nil {
+		return false
+	}
 	for _, screen := range app.Screen.GetAll() {
 		wa := screen.WorkArea
 		if x+width > wa.X+petPositionMinVisible &&
 			x < wa.X+wa.Width-petPositionMinVisible &&
 			y+height > wa.Y+petPositionMinVisible &&
 			y < wa.Y+wa.Height-petPositionMinVisible {
-			return x, y
+			return true
 		}
 	}
+	return false
+}
 
-	if primary := app.Screen.GetPrimary(); primary != nil {
-		wa := primary.WorkArea
-		return wa.X + wa.Width - width - petPositionMargin,
-			wa.Y + wa.Height - height - petPositionMargin
+// petPrimaryBottomRight 返回主屏右下角的回落坐标；没有主屏时 ok=false。
+func petPrimaryBottomRight(app *application.App, width, height int) (x, y int, ok bool) {
+	if app == nil {
+		return 0, 0, false
 	}
-	return x, y
+	primary := app.Screen.GetPrimary()
+	if primary == nil || primary.WorkArea.Width <= 0 || primary.WorkArea.Height <= 0 {
+		return 0, 0, false
+	}
+	wa := primary.WorkArea
+	return wa.X + wa.Width - width - petPositionMargin,
+		wa.Y + wa.Height - height - petPositionMargin,
+		true
+}
+
+// ensurePetOnScreenLocked 在显示前把窗口拉回主屏右下角（若当前位置已不可见）。
+//
+// 只在「显示」路径调用：启动建窗走 petRestorePosition，运行中的显隐/缩放走这里。
+// 调用方必须已持有 petMu。
+func (a *App) ensurePetOnScreenLocked(w application.Window) {
+	if a.app == nil || a.cfg == nil || w == nil {
+		return
+	}
+	x, y := w.Position()
+	width, height := petWindowSize(a.cfg.PetScaleValue())
+	if petPositionVisible(a.app, x, y, width, height) {
+		return
+	}
+	if fx, fy, ok := petPrimaryBottomRight(a.app, width, height); ok {
+		w.SetPosition(fx, fy)
+	}
 }

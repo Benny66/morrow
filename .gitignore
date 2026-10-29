@@ -21,6 +21,8 @@ build/android/
 # ---- Node / 前端 ----
 node_modules/
 frontend/dist/
+# 宠物页 E2E 的截图与 dev server 日志（make e2e-pet 的产物，供人眼看，不入库）
+build/e2e-pet/
 # wails3 generate bindings 的产物（common:generate:bindings，每次 build:frontend 都重跑）。
 # 与 frontend/dist 同类：由 Go 服务的定义派生，不是手写代码。
 # 【为什么必须忽略】入库会造出一个没有症状的漂移面：改了 Go 绑定签名、提交了代码却

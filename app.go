@@ -76,6 +76,12 @@ type App struct {
 	// 它们分布在不同的绑定调用 goroutine 上，不加锁就可能出现
 	// 「刚 Show 又被 Hide」这种用户看不懂的抖动。
 	petMu sync.Mutex
+	// petShapeMu 串行化形态高水位的读取/播种/回写。
+	//
+	// 宠物窗口 4 秒轮询与 reminder:changed 事件可能同时触发 GetPetGrowth；
+	// 两处同时播种会把同一次迁移写两遍，且可能与设置页的 cfg.Save() 交叉。
+	// 只保护这两个字段的读写；配置其它字段的并发模型不变。
+	petShapeMu sync.Mutex
 	// petDockMu 保护 petDock 与 petDockCancel。
 	//
 	// 【为什么与 petMu 分开】petMu 串行化的是"窗口操作"；贴边状态则在位置轮询
@@ -1589,11 +1595,30 @@ func (a *App) GetTodayStats() (*service.TodayStats, error) {
 	return stats, nil
 }
 
-// GetPetGrowth 返回宠物「芽」的生长档位（今日完成率驱动，极轻量，供宠物窗口轮询）。
+// GetPetGrowth 返回宠物「芽」的生长档位（形态 + 今日神态）。
+//
+// 形态高水位是配置里唯一由后端维护的宠物字段：旧版配置首次调用播种一次
+// （把旧版本按今日完成率显示的值保留下来），之后只随长期档抬升。播种/抬升才落盘，
+// 不随 4 秒轮询写文件。全新安装的 config.Default 已置 seeded=true、高水位 0。
 func (a *App) GetPetGrowth() (*service.PetGrowth, error) {
-	g, err := a.svc.PetGrowth()
+	if a.cfg == nil {
+		return nil, apperr.New(apperr.CodeInternal, "配置未初始化")
+	}
+
+	a.petShapeMu.Lock()
+	defer a.petShapeMu.Unlock()
+
+	g, nextFloor, err := a.svc.PetGrowth(a.cfg.PetShapeHighWater, a.cfg.PetShapeSeeded)
 	if err != nil {
 		return nil, apperr.Wrap(err)
+	}
+	if !a.cfg.PetShapeSeeded || nextFloor != a.cfg.PetShapeHighWater {
+		a.cfg.PetShapeHighWater = nextFloor
+		a.cfg.PetShapeSeeded = true
+		// 保存失败不阻断读取：本次响应仍用新档位，下次轮询会重试。
+		if saveErr := a.cfg.Save(); saveErr != nil {
+			slog.Warn("保存宠物形态高水位失败", "err", saveErr)
+		}
 	}
 	return g, nil
 }
@@ -1770,6 +1795,7 @@ func (a *App) applyPetPresentationVisibility() {
 		return
 	}
 	if a.petShouldBeVisible() {
+		a.ensurePetOnScreenLocked(w)
 		w.Show()
 		return
 	}
@@ -1802,6 +1828,8 @@ func (a *App) SetPetSettings(in config.PetSettings) (string, error) {
 			if a.petShouldBeVisible() {
 				// 同 setPetVisible：先还原到展开位置，否则 Show 出来的是屏幕外那块。
 				a.restorePetFromDockLocked(w)
+				// 隐藏期间拔掉副屏/改分辨率：旧坐标可能已不在任何屏幕上，显示前回落。
+				a.ensurePetOnScreenLocked(w)
 				w.Show()
 			}
 			// 即使演示模式隐藏着，也把尺寸/位置更新好，退出时不会带着旧尺寸出现。
@@ -2061,6 +2089,8 @@ func (a *App) ExpandPet() error {
 		return apperr.New(apperr.CodeInternal, "宠物窗口不存在")
 	}
 	w.SetPosition(state.homeX, state.homeY)
+	// 贴边时的 home 可能在已拔掉的副屏上；展开前同样做一次可见性回落。
+	a.ensurePetOnScreenLocked(w)
 
 	a.petDockMu.Lock()
 	a.petDock.collapsed = false
@@ -2610,6 +2640,7 @@ func (a *App) setPetVisible(visible bool) error {
 		// 若之前贴边收着，先把窗口移回展开位置再 Show：
 		// 否则用户看到的是屏幕外那块，会以为宠物丢了。
 		a.restorePetFromDockLocked(w)
+		a.ensurePetOnScreenLocked(w)
 		w.Show()
 	} else {
 		w.Hide()

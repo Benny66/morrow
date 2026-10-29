@@ -26,10 +26,12 @@ import {
   GetRestModeSnapshot,
   GetSitSnapshot,
   ListPendingFires,
+  ListPetPacks,
   MuteSitToday,
   OpenMainWindow,
   SetPetBubbleHeight,
   SetPetBubbleVisible,
+  SetPetSettings,
   SetPresentationMode,
   SetSitTone,
   SnoozeReminder,
@@ -41,7 +43,7 @@ import { useEvent } from '../composables/useEvent'
 import { ReminderEvent, type ReminderFiredPayload } from '../lib/reminder'
 import { State as RestModeState, type Snapshot as RestModeSnapshot } from '../../bindings/morrow/internal/restmode/models.js'
 import { logInfo, logWarn } from '../lib/log'
-import { SitAction, sitActionLabel, sitMoodClass } from '../lib/sit'
+import { SitAction, SitActivity, sitActionLabel, sitMoodClass } from '../lib/sit'
 import {
   ActionID,
   BubbleKind as SitBubbleKindEnum,
@@ -57,25 +59,55 @@ import {
   PET_CELEBRATE_MS,
   PET_CLICK_MAX_TRAVEL_PX,
   PET_COLS,
+  PET_DOZE_AFTER_MS,
+  PET_DOZE_BREATH_MS,
   PET_DRAG_TRAVEL_PX,
   PET_EXPAND_GRACE_MS,
   PET_FPS,
   PET_IDLE_FPS,
   PET_JS_DRAG_FALLBACK,
+  PET_MICRO_ACTION_MAX_MS,
+  PET_MICRO_ACTION_MIN_MS,
+  PET_MICRO_ACTION_MS,
+  PET_MICRO_POOL,
+  PET_MENU_ITEMS,
+  PET_MENU_PACK_EMPTY_HINT,
+  PET_MENU_PACK_LOAD_FAILED_HINT,
+  PET_MENU_PADDING,
+  PET_MENU_SCALE_STEPS,
+  PET_MENU_WIDTH,
+  PET_MIRROR_INITIAL,
+  PET_MIRROR_POSE_BY_CATEGORY,
+  PET_MIRROR_ROW,
+  PET_MIRROR_SHAKE_MS,
   PET_PRESS_STALE_MS,
   PET_SETTINGS_POLL_MS,
+  PET_SLEEP_FPS,
+  PET_WAKE_MS,
   PET_WAVE_MS,
   PetAnim,
   PetEvent,
+  PetMicro,
+  PetMirrorPose,
+  advanceMirror,
   growthStageClass,
+  petMirrorClass,
   type GrowthStage,
   type PetAnimValue,
   type PetDockedPayload,
   type PetDockSide,
+  type PetMenuItem,
+  type PetMicroValue,
+  type PetMirrorPoseValue,
+  type PetMirrorState,
+  type PetTodayMood,
 } from '../lib/pet'
 
 /** 待处理提醒（用绑定返回类型反推，不手写镜像——Go 侧一改这里立刻跟着变）。 */
 type PendingFire = NonNullable<Awaited<ReturnType<typeof ListPendingFires>>>[number]
+
+/** 素材包（同上：从绑定返回值反推类型）。 */
+type PetPack = NonNullable<Awaited<ReturnType<typeof ListPetPacks>>>[number]
 
 /** 久坐快照/气泡同样用绑定返回类型反推，避免前端手写第二份快照。 */
 type SitSnapshotData = Awaited<ReturnType<typeof GetSitSnapshot>>
@@ -93,11 +125,76 @@ const mode = ref<'builtin' | 'sprite'>('builtin')
 const anim = ref<PetAnimValue>(PetAnim.Idle)
 
 /**
- * 芽生长档位（0–4，后端 GetPetGrowth 返回的 stage）。
+ * 芽的**形态**档位（0–4），决定芽的大小与叶展开角。
  *
- * 初值 0：首启尚未拉到数据时显示健康小苗；读取失败时保持上一次值，不闪回。
+ * 来源是 `GetPetGrowth().stage`，它在 Go 侧已经是 `max(长期档, 今日档)`，
+ * 故这里拿到的是"只可能持平或变大"的长期形态——跨天不会缩回去。
  */
 const growth = ref<GrowthStage>(0)
+
+/** 是否已完成首次生长同步；首次同步不播「长高」，否则每次启动都会跳一下。 */
+let growthSynced = false
+
+/**
+ * 今日**神态**档（full / part / thin），只改高光与轻垂，不改尺寸。
+ *
+ * 【为什么不与 growth 合成一个】形态是"养了多久"，神态是"今天怎么样"。
+ * 合成一个就又回到"每天早上缩小一次"的老问题。
+ *
+ * 初值取 part（中性）而不是 thin：挂载后第一次 syncGrowth 之前会先渲染一帧，
+ * 用 thin 的话新用户打开宠物看到的是"一株蔫芽"，等 4 秒轮询回来才转正常。
+ */
+const todayMood = ref<PetTodayMood>('part')
+
+/**
+ * 当前正在播放的待机微动作；空串表示没有。
+ *
+ * 它是**叠加层**：不写 `anim`、不改 `PetAnim`，因此不参与气泡优先级判断。
+ */
+const microAction = ref<PetMicroValue | ''>('')
+
+/**
+ * 当前镜像姿态；空串表示不镜像。
+ *
+ * 【它是待机的替身，不是状态】镜像永远不写 `anim`——待处理、庆祝、挥手、惊醒、打盹
+ * 都改的是 `anim` 或压制门控，天然优先。它只回答"待机时该画哪一行 / 挂哪个姿态 class"。
+ */
+const mirrorPose = ref<PetMirrorPoseValue | ''>('')
+
+/**
+ * 镜像姿态对应的待机绘制行（仅 sprite 模式有意义）。
+ *
+ * 单独存一份而不是每次从 PET_MIRROR_ROW 现查：绘制循环每秒跑 12 次，
+ * 这里的原因是"绘制层不该做业务查表"——查表发生在轮询里一次。
+ */
+const mirrorRow = ref<PetAnimValue>(PetAnim.Idle)
+
+/** 是否在打盹（空闲/锁屏持续 PET_DOZE_AFTER_MS 后进入）。 */
+const dozing = ref(false)
+
+/** 是否正在播「惊醒」反馈（醒来后的 300ms）。 */
+const waking = ref(false)
+
+/**
+ * 系统是否要求减弱动态效果。
+ *
+ * 用 matchMedia 而不是只靠 CSS 媒体查询兜：微动作由 JS 调度，
+ * 若只靠 CSS 停动画，class 仍会被挂上、计时器仍在跑，白费一次调度。
+ */
+const prefersReducedMotion = ref(false)
+
+/**
+ * 根节点的 CSS 变量。
+ *
+ * 时长与间距的唯一真相在 lib/pet.ts；CSS 不复制数字，只消费这里注入的变量。
+ * 否则改 TS 常量时动画时长会静默留在旧值，测试也看不出来。
+ */
+const petRootStyle: Record<string, string> = {
+  '--pet-micro-ms': `${PET_MICRO_ACTION_MS}ms`,
+  '--pet-doze-breath-ms': `${PET_DOZE_BREATH_MS}ms`,
+  '--pet-menu-padding': `${PET_MENU_PADDING}px`,
+  '--pet-mirror-shake-ms': `${PET_MIRROR_SHAKE_MS}ms`,
+}
 
 // ---- 暂停状态 ----
 
@@ -180,6 +277,31 @@ const busy = ref(false)
  */
 const bubbleError = ref('')
 
+// ---- 右键菜单状态 ----
+
+/** 菜单是否可见。 */
+const menuVisible = ref(false)
+/** 菜单左上角坐标（相对宠物窗口，已夹到窗口内）。 */
+const menuPos = ref({ x: 0, y: 0 })
+/** 菜单 DOM 引用：判"这一下点在菜单外面"要用。 */
+const menuRef = ref<HTMLElement | null>(null)
+/** 菜单动作在途，防重复触发。 */
+const menuBusy = ref(false)
+/**
+ * 打开菜单时预取的素材包列表。
+ *
+ * 【为什么要预取】「换形象」能不能点，取决于当前有几个包。第一版是点下去才知道
+ * （`ListPetPacks` 只有一个包时静默 return），用户看到的是"菜单关了、宠物没变"。
+ * 现在打开菜单就先取一次，把不可用状态前置成置灰 + 说明。
+ */
+const menuPacks = ref<PetPack[]>([])
+
+/** 素材包列表是否读取失败；用于区分「没导入」和「读不到」两种置灰原因。 */
+const menuPacksFailed = ref(false)
+
+/** 是否有第二个形象可切（只有内置形象时「换形象」没有意义）。 */
+const canSwitchPack = computed(() => menuPacks.value.length > 1)
+
 // ---- 气泡扩窗的运行时句柄 ----
 
 /** 当前可见气泡的 DOM 引用（四个互斥分支共用；同一时刻只有一个挂载）。 */
@@ -239,6 +361,10 @@ async function applyBubbleFit(): Promise<void> {
 async function fitBubbleOnce(): Promise<void> {
   // 拖拽手势中不改窗口几何：宠物正跟着鼠标走，扩窗会与之抢位置。
   if (petPressed) return
+  // 菜单打开期间不改窗口几何：菜单用 CSS 让气泡让位，气泡测量会变成 0，
+  // 若在这里缩回基础尺寸，已经夹好的菜单会越过新窗口底边被裁掉，
+  // 窗口位置也会变——规格要求这两件事都不发生。关闭菜单后由 closeMenu 补一次 fit。
+  if (menuVisible.value) return
   const bubble = bubbleRef.value
   if (!bubble || bubble.offsetWidth === 0 || bubble.offsetHeight === 0) {
     lastBubbleNeed = -1
@@ -267,6 +393,8 @@ async function fitBubbleOnce(): Promise<void> {
     })
   })
 
+  // 等待期间菜单可能被打开：此时气泡已被 CSS 让位，不能再按 0 高度去缩窗口。
+  if (menuVisible.value) return
   const need = measureBubbleNeed(bubble)
   if (need <= 0) return
   if (need === lastBubbleNeed) return
@@ -331,6 +459,23 @@ let focused = true
 let holdTimer: number | undefined
 /** 设置轮询计时器（主窗换素材后宠物窗口要跟着换）。 */
 let pollTimer: number | undefined
+/** 微动作结束计时器（一次性，不是循环）。 */
+let microTimer: number | undefined
+/** 惊醒反馈结束计时器（一次性）。 */
+let wakeTimer: number | undefined
+/** 距离下一次微动作还剩多少毫秒；由 4 秒轮询递减，不单独开计时器。 */
+let nextMicroActionIn = 0
+/** 暂停原因为 idle/lock 的起始时间戳（毫秒）；0 表示当前不满足打盹条件。 */
+let dozeSince = 0
+/**
+ * 镜像状态机的全部状态（候选/确认计数/生效时间）。
+ *
+ * 这里只存"状态"，**决策在 `advanceMirror()` 纯函数里**（lib/pet.ts）：
+ * 时序规则放 .vue 就只能靠看代码保证，而这份逻辑有三条容易写错的时序约束。
+ */
+let mirrorState: PetMirrorState = { ...PET_MIRROR_INITIAL }
+/** 减弱动态效果的媒体查询句柄；卸载时要摘监听。 */
+let motionQuery: MediaQueryList | undefined
 
 /**
  * 贴边方向；空串表示已展开。
@@ -486,6 +631,24 @@ const sitMoodClassValue = computed(() =>
   sitMoodVisible.value ? sitMoodClass(sitSnapshot.value?.mood) : '',
 )
 
+/**
+ * 镜像姿态的根节点 class。
+ *
+ * 【何时挂】builtin 模式且宠物处于待机**或挥手**时。
+ *   - sprite 模式的姿态由 `mirrorRow` 换图集行表达，再挂 class 会重复表达同一件事；
+ *   - 等待处理/庆祝/惊醒期间不挂：那几种状态下宠物在表达别的东西（并且庆祝/等待
+ *     会动整个身体，叠一个蜷着的底态只会让它变形）。
+ *
+ * 【为什么挥手要挂】不挂的话，蜷着的宠物点一下会先"站起来"挥手再蹲回去——
+ * 一次 900ms 的姿态回弹，看着像坏了。挂上之后挥手只动手臂，身体姿态不动。
+ * 代价是必须让镜像的手臂规则在 `.pet--waving` 下让位（见样式里那两个 `:not`），
+ * 否则后写的镜像规则会盖掉 `.pet--waving .pet__arm--right`，变成"点了不挥手"且不报错。
+ */
+const mirrorClassValue = computed(() => {
+  const visible = anim.value === PetAnim.Idle || anim.value === PetAnim.Waving
+  return mode.value === 'builtin' && visible ? petMirrorClass(mirrorPose.value) : ''
+})
+
 /** 暂停气泡的文案：根据暂停原因显示不同的提示。 */
 const pauseBubbleText = computed(() => {
   if (!paused.value) return ''
@@ -514,7 +677,9 @@ function paintCurrentFrame(): void {
   if (!canvas || !sprite) return
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const row = PET_ANIM_ROW[anim.value]
+  // 镜像只替换【待机】那一行：镜像姿态是待机的替身，不是新的 anim 值。
+  // 这样待处理/庆祝/挥手/惊醒天然优先，且 applyPending 的 setAnim(Idle) 不会把姿态打回。
+  const row = PET_ANIM_ROW[anim.value === PetAnim.Idle ? mirrorRow.value : anim.value]
   const col = frameIndex % PET_COLS
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.drawImage(
@@ -539,7 +704,9 @@ function paintCurrentFrame(): void {
  */
 function loop(now: number): void {
   rafID = window.requestAnimationFrame(loop)
-  const fps = focused && !document.hidden ? PET_FPS : PET_IDLE_FPS
+  // 打盹时降到 4fps（见 PET_SLEEP_FPS 的注释）。这个循环只在 sprite 模式运行；
+  // builtin 的慢节奏由 CSS 动画时长负责（见样式里的 .pet--dozing）。
+  const fps = dozing.value ? PET_SLEEP_FPS : focused && !document.hidden ? PET_FPS : PET_IDLE_FPS
   if (now - lastPaintAt < 1000 / fps) return
   lastPaintAt = now
   frameIndex += 1
@@ -670,6 +837,9 @@ function applyPending(list: PendingFire[]): void {
   bubbleTitle.value = first.title
   bubbleText.value = first.content
   currentFireID.value = first.fire_id
+  // 提醒优先于一切表演：掐掉微动作，打盹中则立刻醒来（不看下一轮轮询）。
+  clearMicroAction()
+  wakeUp()
   setAnim(PetAnim.Waiting)
 }
 
@@ -685,15 +855,36 @@ async function refreshPending(): Promise<void> {
 }
 
 /**
- * 拉取并应用芽生长档位（挂载 / reminder:changed 事件 / 4 秒轮询都会走到这里）。
+ * 拉取并应用芽的生长档位（挂载 / reminder:changed 事件 / 4 秒轮询都会走到这里）。
  *
- * 档位计算在 Go 侧完成，前端只把返回的 stage 映射到 CSS class（见 growthStageClass）；
+ * 两个档位分开用（判定全在 Go 侧，前端只做"整数 → class"）：
+ *   - `stage` 是**形态**（max(高水位, 长期)），决定芽的大小，跨天不回退；
+ *   - `today_stage` 是**今日神态**，只改高光与轻垂。
+ *
  * 失败时保持上一次值，不闪回、不报错。
  */
 async function syncGrowth(): Promise<void> {
+  const previous = growth.value
+  const firstSync = !growthSynced
   try {
     const result = await invoke(() => GetPetGrowth(), 'GetPetGrowth')
     growth.value = (result?.stage ?? 0) as GrowthStage
+    growthSynced = true
+    // 跨档时播一次长高作为回执；提醒/打盹/菜单优先，不抢它们的画面。
+    if (
+      !firstSync &&
+      growth.value > previous &&
+      anim.value === PetAnim.Idle &&
+      !dozing.value &&
+      !waking.value &&
+      !menuVisible.value
+    ) {
+      setAnim(PetAnim.Jumping, PET_CELEBRATE_MS)
+    }
+    const today = result?.today_stage ?? 0
+    const hasTarget = result?.has_target ?? false
+    // 没安排目标时「0%」不是失败，用中性神态；否则新用户/停用场景会一直蔫着。
+    todayMood.value = hasTarget ? (today >= 4 ? 'full' : today >= 1 ? 'part' : 'thin') : 'part'
   } catch (e) {
     // 读不到时保持上一次形态：宠物窗口没有 DevTools，静默降级优于报错。
     logWarn('读取芽生长档位失败', { err: String(e) })
@@ -721,6 +912,228 @@ async function syncInterruptionState(): Promise<void> {
   } catch (e) {
     logWarn('读取顺延状态失败', { err: String(e) })
   }
+}
+
+// ---- 待机行为：微动作 / 打盹 / 惊醒 ----
+//
+// 宠物在「没有提醒」的时间里必须有自己的节奏，否则它只是一张会呼吸的贴图。
+// 三条原则（改这里之前先读）：
+//   1. 只在 builtin 模式做——图集只有 9 行固定动作，硬塞会错行；
+//   2. 一切压制条件优先于表演（待处理 / 暂停 / 演示 / 气泡 / 贴边收起 / 减弱动态）；
+//   3. 调度挂在既有 4 秒轮询上，不新增 setInterval——否则"谁在什么时候动"没法推理。
+
+/** 取一个 [MIN, MAX] 之间的随机间隔（毫秒）。 */
+function randomMicroDelay(): number {
+  const span = PET_MICRO_ACTION_MAX_MS - PET_MICRO_ACTION_MIN_MS
+  return PET_MICRO_ACTION_MIN_MS + Math.round(Math.random() * span)
+}
+
+/** 清掉正在播放的微动作（被打断时用）。 */
+function clearMicroAction(): void {
+  if (microTimer !== undefined) {
+    window.clearTimeout(microTimer)
+    microTimer = undefined
+  }
+  microAction.value = ''
+}
+
+/**
+ * 能不能演一次微动作。
+ *
+ * 这是唯一的门控收口：新增任何"别演"的条件都加在这里，不要散到调用点，
+ * 否则下一次加条件一定漏掉某条路径（比如只在 click 里判、却没在轮询里判）。
+ */
+function canPlayMicro(): boolean {
+  if (mode.value !== 'builtin') return false
+  if (prefersReducedMotion.value) return false
+  if (dozing.value || waking.value) return false
+  if (pendingCount.value > 0) return false
+  if (paused.value) return false
+  if (suggestionVisible.value) return false
+  if (restAccompanying.value || restWarningVisible.value) return false
+  if (deferringBubbleVisible.value || pauseBubbleVisible.value) return false
+  if (bubbleVisible.value || sitBubbleVisible.value) return false
+  if (dockSide.value !== '') return false
+  if (menuVisible.value) return false
+  if (anim.value !== PetAnim.Idle) return false
+  return true
+}
+
+/**
+ * 挑一个本次可以演的微动作。
+ *
+ * 【为什么不是"镜像生效就禁演"】镜像在白天几乎一直生效，禁演等于把 pet-autonomy 的
+ * 微动作整天关掉，宠物反而更"死"。冲突只发生在**抢同一个元素**的动作上，
+ * 故只把它们从池子里剔掉：
+ *   - `stretch` 动 `.pet__body-group`（镜像的坐低/缩放也在这一层）；
+ *   - `look` 动 `.pet__eyes`（`watching` 也放大这一层）。
+ * 为什么必须剔：CSS animation 会**整段覆盖**同一元素的静态 transform，
+ * 硬叠的结果是"演微动作那一秒突然变回正常大小，然后弹回去"。
+ */
+function pickMicroAction(): PetMicroValue {
+  const pose = mirrorPose.value
+  const pool = PET_MICRO_POOL.filter((item) => {
+    if (item === PetMicro.Stretch) return pose === ''
+    if (item === PetMicro.Look) return pose !== PetMirrorPose.Watching
+    return true
+  })
+  const index = Math.floor(Math.random() * pool.length)
+  return pool[index] ?? PetMicro.Groom
+}
+
+/** 播一次微动作：随机取池中一项，到时自动清除。 */
+function playMicro(): void {
+  microAction.value = pickMicroAction()
+  nextMicroActionIn = randomMicroDelay()
+  if (microTimer !== undefined) window.clearTimeout(microTimer)
+  microTimer = window.setTimeout(() => {
+    microTimer = undefined
+    microAction.value = ''
+  }, PET_MICRO_ACTION_MS)
+}
+
+/** 打盹条件的唯一判定：暂停原因为空闲/锁屏、且没有更需要露脸的事。 */
+function shouldDozeNow(): boolean {
+  if (!paused.value) return false
+  if (pauseReason.value !== 'idle' && pauseReason.value !== 'lock') return false
+  if (pendingCount.value > 0) return false
+  if (dockSide.value !== '') return false
+  return true
+}
+
+/** 推进打盹状态（由 4 秒轮询驱动）。 */
+function tickDoze(nowMs: number): void {
+  if (!shouldDozeNow()) {
+    dozeSince = 0
+    if (dozing.value) wakeUp()
+    return
+  }
+  if (dozing.value) return
+  if (dozeSince === 0) {
+    dozeSince = nowMs
+    return
+  }
+  // 用真实时间差而不是数 tick：锁屏/休眠期间计时器会被节流，
+  // 数 tick 会让"离开 10 分钟"变成"等 10 分钟 × 节流倍数"。
+  if (nowMs - dozeSince >= PET_DOZE_AFTER_MS) enterDoze()
+}
+
+/** 进入打盹：先掐掉微动作，否则会看到"边睡边张望"。 */
+function enterDoze(): void {
+  clearMicroAction()
+  dozing.value = true
+}
+
+/**
+ * 醒来：幂等。
+ *
+ * 三个入口（轮询发现暂停解除 / 鼠标进入 / 出现待处理）都可能同时触发；
+ * 不在打盹时直接返回，避免同一次醒来播两遍惊醒。
+ */
+function wakeUp(): void {
+  dozeSince = 0
+  if (!dozing.value) return
+  dozing.value = false
+  waking.value = true
+  // builtin 的惊醒由 .pet--waking 的 CSS 负责；sprite 没有眼睛/芽的 DOM，
+  // 用既有 jumping 行播一次短回执，否则精灵模式醒来只有帧率变化、看不到反馈。
+  if (mode.value === 'sprite') setAnim(PetAnim.Jumping, PET_WAKE_MS)
+  if (wakeTimer !== undefined) window.clearTimeout(wakeTimer)
+  wakeTimer = window.setTimeout(() => {
+    wakeTimer = undefined
+    waking.value = false
+  }, PET_WAKE_MS)
+}
+
+/** 推进微动作调度（由 4 秒轮询驱动；精度 ±4 秒对 40–90 秒的间隔无感）。 */
+function tickMicro(elapsedMs: number): void {
+  if (microAction.value !== '') return
+  if (!canPlayMicro()) {
+    // 不能演时把计数重置成"下一轮的随机值"：否则条件一解除就会立刻补演一次，
+    // 用户看到的是"刚开完会，宠物猛地动一下"。
+    nextMicroActionIn = randomMicroDelay()
+    return
+  }
+  // 0 表示"还没排过"（窗口刚打开的第一轮）：先排一次随机间隔。
+  // 少了这一步，宠物会在窗口出现 4 秒后就动一下，像是被启动动作惊到。
+  if (nextMicroActionIn <= 0) {
+    nextMicroActionIn = randomMicroDelay()
+    return
+  }
+  nextMicroActionIn -= elapsedMs
+  if (nextMicroActionIn > 0) return
+  playMicro()
+}
+
+// ---- 待机行为：镜像 ----
+//
+// 宠物跟着「你在做什么」改变体态（openspec/changes/pet-activity-mirror）。
+// 三条原则（改这里之前先读）：
+//   1. 镜像永不写 `anim`——它是待机的替身，见 paintCurrentFrame 与 design.md 第 4 节；
+//   2. 进入慢、退出快：进入要 PET_MIRROR_CONFIRM_TICKS 次确认 + 最小停留，退出立即；
+//   3. 调度挂在既有 4 秒轮询上，不新增 setInterval。
+
+/**
+ * 能不能应用镜像姿态。
+ *
+ * 【为什么这里不判 prefersReducedMotion】减弱动态约束的是"动"，不是"样子"：
+ * 姿态本身是静态倾斜（动画部分由 CSS 媒体查询关掉），保留它才是对用户有用的信息。
+ * 微动作不同——它整个就是"动一下"，故在 canPlayMicro 里直接挡掉。
+ */
+function canApplyMirror(): boolean {
+  const activity = sitSnapshot.value?.activity
+  if (!activity) return false
+  if (activity.level === SitActivity.Away) return false
+  if (pendingCount.value > 0) return false
+  if (paused.value) return false
+  if (suggestionVisible.value) return false
+  if (dockSide.value !== '') return false
+  if (dozing.value || waking.value) return false
+  if (menuVisible.value) return false
+  return true
+}
+
+/** 立即清空镜像（压制条件成立 / 卸载时用；不受最小停留约束）。 */
+function clearMirror(): void {
+  mirrorState = { ...PET_MIRROR_INITIAL }
+  if (mirrorPose.value === '') return
+  mirrorPose.value = ''
+  mirrorRow.value = PetAnim.Idle
+}
+
+/**
+ * 把姿态落到渲染层并留痕。
+ *
+ * 【为什么打日志】姿态是"看得见但说不清"的东西：用户报"没反应"时，
+ * 唯一能区分「链路没通」与「幅度太小」的证据就是这一行。
+ */
+function setMirrorPose(pose: PetMirrorPoseValue | '', nowMs: number, category: string): void {
+  mirrorPose.value = pose
+  mirrorRow.value = pose === '' ? PetAnim.Idle : PET_MIRROR_ROW[pose]
+  logInfo('镜像姿态已切换', {
+    pose: pose || '(无)',
+    category: category || '(无)',
+    at: nowMs,
+  })
+}
+
+/**
+ * 推进镜像姿态（由 4 秒轮询驱动）。
+ *
+ * 决策全在 `advanceMirror()`（纯函数）：进入要 3 次确认、换过之后 20 秒内不再换、
+ * 压制条件立即退出。这里只做三件事——判门控、取候选、把结果落到 ref 上。
+ */
+function tickMirror(nowMs: number): void {
+  const allowed = canApplyMirror()
+  const category = sitSnapshot.value?.activity?.category ?? ''
+  const want: PetMirrorPoseValue | '' =
+    allowed && category ? (PET_MIRROR_POSE_BY_CATEGORY[category] ?? '') : ''
+
+  const next = advanceMirror(mirrorState, { allowed, want, nowMs })
+  if (next.pose !== mirrorState.pose) {
+    setMirrorPose(next.pose, nowMs, category)
+  }
+  mirrorState = next
 }
 
 /** 从宠物建议进入演示模式（source=suggested）。 */
@@ -924,6 +1337,9 @@ useEvent(ReminderEvent.Changed, () => {
 // 前端只做视觉配合（把宠物平移到露出的那条窄边里），窗口位置由后端负责。
 useEvent<PetDockedPayload>(PetEvent.Docked, (payload) => {
   dockSide.value = payload.side
+  // 收起时必须关菜单：菜单是窗口内的 fixed 层，窗口被移到屏幕外之后它跟着跑出可视区，
+  // 等用户下次划过窄边展开时，菜单会以一个"过期"的位置突然出现。
+  if (payload.side !== '') closeMenu()
 })
 
 // ---- 交互 ----
@@ -1061,6 +1477,200 @@ function openMainWindow(): void {
   })
 }
 
+// ---- 右键菜单 ----
+
+/** 宠物设置的可绑定视图（从绑定返回值反推，不手写第二份类型）。 */
+type PetSettings = Awaited<ReturnType<typeof GetPetSettings>>
+/** 只允许改这三项；其余字段一律沿用当前快照。 */
+type PetSettingsPatch = Partial<Pick<PetSettings, 'pet_visible' | 'pet_scale' | 'pet_pack_id'>>
+
+/**
+ * 把坐标夹进「视口减去菜单尺寸」的范围内。
+ *
+ * 单独成函数是因为要用两次：先用常量粗放一次（避免首帧闪到窗口外），
+ * 渲染后再用实测尺寸纠正一次。
+ */
+function clampMenuOffset(cursor: number, size: number, viewport: number): number {
+  const max = Math.max(PET_MENU_PADDING, viewport - size - PET_MENU_PADDING)
+  return Math.min(Math.max(PET_MENU_PADDING, cursor), max)
+}
+
+/**
+ * 打开菜单。
+ *
+ * 【事件源为什么是 contextmenu——已对源码确认，不是猜的】
+ * 读 v3.0.0-beta.23 的 `@wailsio/runtime/dist/drag.js`：
+ *   1. 拖拽只在 `pressed & 1`（主键）时才 arm，右键按下只让 `buttons` 记上 bit 2，
+ *      既不进 `primaryDown` 也不会置 `dragging`；
+ *   2. `suppressEvent` 对 contextmenu 的抑制条件是 `dragging || resizing`；
+ *   3. 拖拽进行中的右键 mousedown 会被 `update()` 吞（`dragging && event.button !== 0`）。
+ * 故静止右键能正常到达页面；拖拽中右键被吞正好是期望行为（此刻不该弹菜单）。
+ *
+ * 【贴边收起时不弹】此刻用户是在"划过"那 20px 窄边，不是在操作宠物；
+ * 弹出菜单还会把宠物挤出可见区，而他想要的只是展开。
+ */
+async function onPetContextMenu(event: MouseEvent): Promise<void> {
+  if (dockSide.value !== '') return
+  // 菜单是用户在操作，别同时演微动作
+  clearMicroAction()
+  // 先取素材包列表：菜单项要用它决定「换形象」是能点还是置灰。
+  // 这一步在显示之前完成，避免"先显示成可点、几十毫秒后突然变灰"的闪动。
+  await refreshMenuPacks()
+  // 第一次用常量粗放：避免菜单先渲染在窗口外再跳回来。
+  menuPos.value = {
+    x: clampMenuOffset(event.clientX, PET_MENU_WIDTH, window.innerWidth),
+    y: Math.max(PET_MENU_PADDING, event.clientY),
+  }
+  menuVisible.value = true
+
+  // 第二次按【实测】尺寸纠正。必须有这一步：条目高度不是常数（有内边距、
+  // 「隐藏宠物」还多一行说明），按常数估算会差 10px 量级——而 `.pet` 是
+  // overflow:hidden，差出来的那几像素正好把最后一项裁掉，且不会有任何报错。
+  await nextTick()
+  const menu = menuRef.value
+  if (!menu) return
+  menuPos.value = {
+    x: clampMenuOffset(event.clientX, menu.offsetWidth, window.innerWidth),
+    y: clampMenuOffset(event.clientY, menu.offsetHeight, window.innerHeight),
+  }
+}
+
+/** 关闭菜单（幂等）。 */
+function closeMenu(): void {
+  if (!menuVisible.value) return
+  menuVisible.value = false
+  // 菜单期间气泡被 CSS 隐藏、fit 被跳过；关掉后等 DOM 恢复可见再重测一次，
+  // 否则气泡可能保持 0 高度直到下一次 4 秒轮询。
+  void nextTick(() => {
+    if (!menuVisible.value && bubbleRef.value) void applyBubbleFit()
+  })
+}
+
+/** 点在菜单外面关闭。 */
+function onWindowPointerDownForMenu(event: MouseEvent): void {
+  if (!menuVisible.value) return
+  const menu = menuRef.value
+  if (menu && event.target instanceof Node && menu.contains(event.target)) return
+  closeMenu()
+}
+
+/** Escape 关闭：宠物窗口通常没有键盘焦点，故监听挂在 window 上而不是元素上。 */
+function onWindowKeydownForMenu(event: KeyboardEvent): void {
+  if (!menuVisible.value || event.key !== 'Escape') return
+  event.preventDefault()
+  closeMenu()
+}
+
+/**
+ * 提交一次宠物设置改动。
+ *
+ * 【必须拼完整结构体】`SetPetSettings` 收的是整个 `PetSettings`；只传要改的字段，
+ * 另外两个会被写成零值（`pet_scale:0` 回落默认、`pet_pack_id:""` 回落内置形象），
+ * 表现为"换个形象顺手把缩放重置了"。本函数是唯一入口，
+ * **禁止在菜单项里手写结构体字面量**。
+ */
+async function withPetSettings(patch: PetSettingsPatch): Promise<void> {
+  const settings = await invoke(() => GetPetSettings(), 'GetPetSettings')
+  await invoke(() => SetPetSettings({ ...settings, ...patch }), 'SetPetSettings')
+}
+
+/** 换形象：按 ListPetPacks 顺序切到下一个，到末尾回卷。 */
+async function refreshMenuPacks(): Promise<void> {
+  try {
+    menuPacks.value = (await invoke(() => ListPetPacks(), 'ListPetPacks')) ?? []
+    menuPacksFailed.value = false
+  } catch (e) {
+    // 取不到就按"没有可选项"处理：宁可置灰并说明，也不要让用户点了一下没反应。
+    menuPacks.value = []
+    menuPacksFailed.value = true
+    logWarn('读取宠物素材包失败', { err: String(e) })
+  }
+}
+
+/**
+ * 切换形象。
+ *
+ * 【为什么先判 `length <= 1`】只有内置形象时，`(current+1) % 1` 还是它自己，
+ * 切了等于没切。第一版在这种情况下静默 return——菜单关了、宠物没变、日志也没有一行，
+ * 用户只能得出"这个功能坏了"。现在这条分支在菜单里就是禁用态（见 menuItemDisabled）。
+ */
+async function cyclePetPack(): Promise<void> {
+  if (!canSwitchPack.value) await refreshMenuPacks()
+  const packs = menuPacks.value
+  if (packs.length <= 1) return
+  // findIndex 为 -1 表示当前包已不在列表里（被删了/改了名）：从第一个开始，
+  // 而不是"原地不动"——否则用户会以为换形象对他失效了。
+  const current = packs.findIndex((pack) => pack.id === packID.value)
+  const next = packs[(current + 1) % packs.length]
+  if (!next || next.id === packID.value) return
+  await withPetSettings({ pet_pack_id: next.id })
+  await syncSettings()
+}
+
+/** 菜单项的补充说明：静态 hint 优先，其次按当前状态解释"为什么不能点"。 */
+function menuItemHint(item: PetMenuItem): string | undefined {
+  if (item.action === 'cyclePetPack' && !canSwitchPack.value) {
+    return menuPacksFailed.value ? PET_MENU_PACK_LOAD_FAILED_HINT : PET_MENU_PACK_EMPTY_HINT
+  }
+  return item.hint
+}
+
+/** 菜单项是否禁用：动作在途一律禁用；「换形象」在只有一个素材包时禁用。 */
+function menuItemDisabled(item: PetMenuItem): boolean {
+  if (menuBusy.value) return true
+  return item.action === 'cyclePetPack' && !canSwitchPack.value
+}
+
+/** 缩放：在 PET_MENU_SCALE_STEPS 里取下一个更大的档，到顶回到底档。 */
+async function cyclePetScale(): Promise<void> {
+  const next = PET_MENU_SCALE_STEPS.find((step) => step > scale.value + 0.001) ?? PET_MENU_SCALE_STEPS[0]
+  if (next === undefined || Math.abs(next - scale.value) < 0.001) return
+  await withPetSettings({ pet_scale: next })
+  // 窗口尺寸由 Go 侧按新 scale 重算；这里同步一次本地值，免得下一次轮询前看着不匹配。
+  await syncSettings()
+}
+
+/** 今天先这样：与气泡「更多」里的同一动作同源。 */
+async function muteTodayFromMenu(): Promise<void> {
+  await invoke(() => MuteSitToday(), 'MuteSitToday')
+  await syncSitState()
+}
+
+/** 隐藏宠物：只改配置层的显隐，设置页可重新打开（那里会先还原贴边位置）。 */
+async function hidePetFromMenu(): Promise<void> {
+  await withPetSettings({ pet_visible: false })
+}
+
+/** 执行菜单项：分发 + 收尾。失败只记日志——菜单已关，没有地方显示错误。 */
+async function runMenuItem(item: PetMenuItem): Promise<void> {
+  if (menuItemDisabled(item)) return
+  menuBusy.value = true
+  try {
+    switch (item.action) {
+      case 'cyclePetPack':
+        await cyclePetPack()
+        break
+      case 'cyclePetScale':
+        await cyclePetScale()
+        break
+      case 'muteTodayFromMenu':
+        await muteTodayFromMenu()
+        break
+      case 'openMainWindow':
+        openMainWindow()
+        break
+      case 'hidePetFromMenu':
+        await hidePetFromMenu()
+        break
+    }
+  } catch (e) {
+    logWarn('宠物菜单动作失败', { action: item.action, err: String(e) })
+  } finally {
+    menuBusy.value = false
+    closeMenu()
+  }
+}
+
 /**
  * 处理当前气泡里的提醒：完成 / 推迟。
  *
@@ -1122,13 +1732,15 @@ function scheduleCollapse(delayMs: number): void {
   }, delayMs)
 }
 
-/** 鼠标进入：若正处于贴边收起态，展开回原位置。 */
+/** 鼠标进入：若正处于贴边收起态，展开回原位置；无论哪种情况都顺手唤醒。 */
 function onPetEnter(): void {
   hovering = true
   if (collapseTimer !== undefined) {
     window.clearTimeout(collapseTimer)
     collapseTimer = undefined
   }
+  // 鼠标靠近就是"人回来了"最直接的信号，比轮询发现暂停解除更早。
+  wakeUp()
   if (dockSide.value === '') return
   // 宽限期：窗口移回原位后鼠标可能落在窗口外，会立刻收到一次 mouseleave。
   // 不设宽限期的话，宠物会在"展开→收起"之间快速抖动。
@@ -1170,6 +1782,13 @@ async function pollSettings(): Promise<void> {
   await syncInterruptionState()
   await syncRestModeState()
   await syncSitState()
+  // 行为调度放在最后：门控依赖上面刚刷新的暂停/待处理/休息/久坐状态。
+  // 两者都只做整数递减与一次分支判断，不额外发绑定调用。
+  const nowMs = Date.now()
+  tickDoze(nowMs)
+  // 镜像先于微动作：镜像决定待机底态，微动作要看到它才能判"该不该叠"。
+  tickMirror(nowMs)
+  tickMicro(PET_SETTINGS_POLL_MS)
   // 4 秒一次的兜底：原生窗口显隐、引擎差异都可能让观察器漏事件。
   // 有气泡时重报一次；Go 侧对相同尺寸是幂等的，不会反复 resize。
   if (bubbleRef.value) void applyBubbleFit()
@@ -1183,6 +1802,16 @@ function onFocus(): void {
 
 function onBlur(): void {
   focused = false
+  // 失焦也关菜单：宠物窗口失去焦点通常意味着用户去看别的窗口了，
+  // 留着菜单会挡住宠物，而它已经不在用户的注意力里。
+  closeMenu()
+}
+
+/** 系统「减弱动态效果」偏好在运行期间被切换。 */
+function onReducedMotionChange(event: MediaQueryListEvent): void {
+  prefersReducedMotion.value = event.matches
+  // 中途打开时立刻掐掉正在演的微动作：等它演完再停，用户会以为这个开关没生效。
+  if (event.matches) clearMicroAction()
 }
 
 onMounted(async () => {
@@ -1195,7 +1824,16 @@ onMounted(async () => {
   // mousemove 无条件挂载：它前半段要判「这一轮是不是拖动」，两种模式都用得上；
   // 搬窗口的后半段由函数内部按 PET_JS_DRAG_FALLBACK 自己挡掉。
   window.addEventListener('mousemove', onWindowPointerMove)
+  // 菜单的"点外面关闭"与 Escape 都挂在 window 上：宠物窗口没有标题栏，
+  // 焦点通常不在某个元素上，挂在元素上的 keydown 永远等不到。
+  window.addEventListener('mousedown', onWindowPointerDownForMenu, true)
+  window.addEventListener('keydown', onWindowKeydownForMenu)
   focused = document.hasFocus()
+
+  // 减弱动态效果：既决定 CSS（媒体查询自己会生效），也决定 JS 调度要不要发车。
+  motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  prefersReducedMotion.value = motionQuery.matches
+  motionQuery.addEventListener('change', onReducedMotionChange)
 
   try {
     await syncSettings()
@@ -1221,8 +1859,18 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', onWindowPointerUp)
   window.removeEventListener('blur', cancelPetPress)
   window.removeEventListener('mousemove', onWindowPointerMove)
+  window.removeEventListener('mousedown', onWindowPointerDownForMenu, true)
+  window.removeEventListener('keydown', onWindowKeydownForMenu)
   cancelPetPress()
   stopLoop()
+  motionQuery?.removeEventListener('change', onReducedMotionChange)
+  motionQuery = undefined
+  clearMicroAction()
+  clearMirror()
+  if (wakeTimer !== undefined) {
+    window.clearTimeout(wakeTimer)
+    wakeTimer = undefined
+  }
   bubbleObserver?.disconnect()
   bubbleObserver = undefined
   sprite = null
@@ -1248,9 +1896,16 @@ onUnmounted(() => {
     :class="[
       `pet--${anim}`,
       growthStageClass(growth),
+      `pet--today-${todayMood}`,
       sitMoodClassValue,
       dockSide ? `pet--dock-${dockSide}` : '',
+      microAction ? `pet--micro pet--micro-${microAction}` : '',
+      mirrorClassValue,
+      dozing ? 'pet--dozing' : '',
+      waking ? 'pet--waking' : '',
+      menuVisible ? 'pet--menu' : '',
     ]"
+    :style="petRootStyle"
     @mouseenter="onPetEnter"
     @mouseleave="onPetLeave"
   >
@@ -1360,11 +2015,49 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- 右键菜单：自绘在窗口内（不新增 Go 侧 API）。位置由光标决定并夹在窗口内，
+         故不会被 240×380 的窗口裁掉；打开时由 .pet--menu 让气泡让位（数据不动）。
+         --wails-draggable: no-drag 是必须的：--wails-draggable 会从 .pet 继承下来，
+         不排除的话点菜单项会先启动窗口拖拽，click 被 suppressEvent 吞掉。 -->
+    <div
+      v-if="menuVisible"
+      ref="menuRef"
+      class="pet__menu"
+      role="menu"
+      :style="{
+        left: `${menuPos.x}px`,
+        top: `${menuPos.y}px`,
+        width: `${PET_MENU_WIDTH}px`,
+        maxWidth: `calc(100vw - ${PET_MENU_PADDING * 2}px)`,
+        maxHeight: `calc(100vh - ${PET_MENU_PADDING * 2}px)`,
+      }"
+    >
+      <button
+        v-for="item in PET_MENU_ITEMS"
+        :key="item.id"
+        class="pet__menu-item"
+        type="button"
+        role="menuitem"
+        :disabled="menuItemDisabled(item)"
+        @click="runMenuItem(item)"
+      >
+        <span class="pet__menu-label">{{ item.label }}</span>
+        <span v-if="menuItemHint(item)" class="pet__menu-hint">{{ menuItemHint(item) }}</span>
+      </button>
+    </div>
+
     <!-- 宠物本体：整块是拖拽区（窗口无边框，拖它就是移动窗口的方式）。
          用 mousedown 而不是 click 起手势：click 与拖拽共用同一串鼠标事件，
          谁先谁后由 wails 的拖拽逻辑决定，靠它判「点击」是不可靠的。
-         拖拽属性走内联样式，兜底模式下会被切成 no-drag（见 artStyleWithDrag）。 -->
-    <div class="pet__art" ref="petArtRef" :style="artStyleWithDrag" @mousedown="onPetPointerDown">
+         拖拽属性走内联样式，兜底模式下会被切成 no-drag（见 artStyleWithDrag）。
+         右键单独走 contextmenu：拖拽只由主键 arm，右键不会启动拖拽（见 onPetContextMenu）。 -->
+    <div
+      class="pet__art"
+      ref="petArtRef"
+      :style="artStyleWithDrag"
+      @mousedown="onPetPointerDown"
+      @contextmenu.prevent="onPetContextMenu"
+    >
       <canvas v-if="mode === 'sprite'" ref="canvasRef" class="pet__canvas" />
 
       <!-- 内置形象「小满」：一滴水 + 头顶一株芽，纯程序化绘制（呼吸/眨眼/摇芽全靠 CSS），
@@ -1840,7 +2533,11 @@ onUnmounted(() => {
   transform: rotate(15deg) scaleY(0.84);
 }
 
-/* ---- 芽随今日完成率生长：五档 ----
+/* ---- 芽的形态：五档 ----
+   这里的 `.pet--growth-N` 由【形态档】驱动，形态档 = max(长期档, 今日档)，
+   其中长期档来自「累计完成天数」——**不是**今日完成率。
+   今日完成率只驱动 `.pet--today-*` 那组神态类（高光/轻垂），永远不碰 scale。
+   （这一行原本写的是"芽随今日完成率生长"，跨天归零的 bug 就是那个口径造成的。）
    「叶展开角」负=内收、正=展开；左右两叶互为镜像：
    左叶正角=内收/负角=展开，右叶相反。整体 scale 见下表。
    | 档位 | scale | 叶展开角 | 左叶 rotate | 右叶 rotate |
@@ -1867,31 +2564,36 @@ onUnmounted(() => {
 }
 
 .pet--growth-0 .pet__leaf--left {
-  transform: rotate(6deg);
+  --leaf-left-angle: 6deg;
+  transform: rotate(var(--leaf-left-angle));
 }
 .pet--growth-0 .pet__leaf--right {
   transform: rotate(-6deg);
 }
 .pet--growth-1 .pet__leaf--left {
-  transform: rotate(0deg);
+  --leaf-left-angle: 0deg;
+  transform: rotate(var(--leaf-left-angle));
 }
 .pet--growth-1 .pet__leaf--right {
   transform: rotate(0deg);
 }
 .pet--growth-2 .pet__leaf--left {
-  transform: rotate(-8deg);
+  --leaf-left-angle: -8deg;
+  transform: rotate(var(--leaf-left-angle));
 }
 .pet--growth-2 .pet__leaf--right {
   transform: rotate(8deg);
 }
 .pet--growth-3 .pet__leaf--left {
-  transform: rotate(-14deg);
+  --leaf-left-angle: -14deg;
+  transform: rotate(var(--leaf-left-angle));
 }
 .pet--growth-3 .pet__leaf--right {
   transform: rotate(14deg);
 }
 .pet--growth-4 .pet__leaf--left {
-  transform: rotate(-20deg);
+  --leaf-left-angle: -20deg;
+  transform: rotate(var(--leaf-left-angle));
 }
 .pet--growth-4 .pet__leaf--right {
   transform: rotate(20deg);
@@ -1941,6 +2643,227 @@ onUnmounted(() => {
   animation: pet-sprout-pop 520ms var(--ease-in-out) infinite;
 }
 
+/* ---- 今日神态：只改「脸色」，不改尺寸 ----
+   与形态档（.pet--growth-*）刻意分开：形态是「养了多久」，神态是「今天怎么样」。
+   今日档永远不碰 scale——一旦今日影响尺寸，就又会变成「每天早上缩小一次」。
+   久坐情绪优先于今日神态，故用 :not 把它让开：不靠书写顺序取胜，改文件顺序也不会错。 */
+.pet--today-full .pet__sheen {
+  opacity: 0.62;
+}
+
+.pet--today-part .pet__sheen {
+  opacity: 0.5;
+}
+
+.pet--today-thin .pet__sheen {
+  opacity: 0.34;
+}
+
+/* 优先级阶梯（高 → 低）：久坐情绪 / 打盹 / 惊醒 > 今日神态。
+   这里把四个"更高优先"的状态显式 :not 掉，而不是靠书写顺序——
+   这条选择器带四个类，权重 (0,4,0)，比 .pet--dozing .pet__sprout-mood (0,2,0) 高，
+   不让开的话打盹时芽会保持"今天没做完"的耷拉角度，看起来像没睡着。 */
+.pet--today-thin:not(.pet--sit-concerned):not(.pet--sit-droopy):not(.pet--dozing):not(.pet--waking)
+  .pet__sprout-mood {
+  transform: rotate(5deg) scaleY(0.94);
+}
+
+/* ---- 待机微动作 ----
+   三条约定：
+     1. 都是 1.2 秒以内的一次性动作，由 class 驱动、到时摘掉，不循环；
+     2. 动作期间**暂停**呼吸（animation-play-state），不是删掉——删掉会让呼吸在
+        微动作结束时从头开始，看起来像卡了一下；
+     3. 只用既有元素的既有坐标系，不新造 transform-origin。 */
+.pet--micro .pet__svg {
+  animation-play-state: paused;
+}
+
+.pet--micro-look .pet__eyes {
+  animation: pet-micro-look var(--pet-micro-ms, 1200ms) var(--ease-in-out);
+}
+
+.pet--micro-stretch .pet__body-group {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: pet-micro-stretch var(--pet-micro-ms, 1200ms) var(--ease-in-out);
+}
+
+.pet--micro-groom .pet__leaf--left {
+  animation: pet-micro-groom var(--pet-micro-ms, 1200ms) var(--ease-in-out);
+}
+
+.pet--micro-yawn .pet__mouth {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: pet-micro-yawn var(--pet-micro-ms, 1200ms) var(--ease-in-out);
+}
+
+/* 打哈欠要闭眼：与眨眼动画互斥，故直接停掉再压扁，不让两个动画抢 transform */
+.pet--micro-yawn .pet__eyes-open {
+  animation: none;
+  transform: scaleY(0.12);
+}
+
+/* ---- 镜像姿态 ----
+   宠物跟着「你在做什么」改变体态（openspec/changes/pet-activity-mirror）。
+   三条约定：
+     1. 只改 transform，不引入任何新颜色；
+     2. **幅度按「96px 高的宠物」校准**：`pet-character.md` 明确"脸的表情要 192px
+        以上才看得清"，反过来说 96px 下只有【轮廓级】变化能读到。第一版用 2–3px 位移与
+        1.5° 旋转，实测在 scale=0.5（96px）下等于没做——所以这里的量级是 6–7px 与 3–5°；
+     3. 与微动作共存：微动作是 CSS animation，在层叠里赢过这里的静态 transform，
+        演完自动回到姿态。不要为了"防打架"去关掉微动作（那等于整天不让宠物动）。
+   sprite 模式的姿态由换图集行表达（PET_MIRROR_ROW），不挂这些 class。 */
+.pet--mirror-working .pet__body-group,
+.pet--mirror-listening .pet__body-group,
+.pet--mirror-watching .pet__body-group {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+/* 一起埋头：整体坐低 10px 并缩到 93%，向左压 4°。
+   【为什么是"坐低 + 缩小"而不是"前倾"】画板 192×208 里，芽尖在 y≈7、阴影在 y≈194——
+   **上方几乎没有余量**（上抬超过 6px 就裁切），所以"抬头/站高"这类姿态在这套素材上做不出来；
+   能读出来的只有向下与缩放。缩小 7% 在 96px 高时约 7px，是真正能被余光捕捉的量级。 */
+.pet--mirror-working .pet__body-group {
+  transform: translateY(10px) rotate(-4deg) scale(0.93);
+}
+
+/* working 的手臂摆动。`:not(.pet--waving)` 是必须的：挥手动的也是 `.pet__arm--right`，
+   而镜像规则写在本文件更后面——不让位的话同优先级下镜像赢，点了不挥手且不报错。 */
+.pet--mirror-working:not(.pet--waving) .pet__arm--right,
+.pet--mirror-working:not(.pet--waving) .pet__arm--left {
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+  animation: pet-mirror-typing var(--pet-mirror-shake-ms, 1600ms) var(--ease-in-out) infinite;
+}
+
+/* 你说的我听着：整体向我这边倾 9° 并侧移 6px + 右手绕肩抬起 45°。
+   【为什么角度给到 9°】6° 的倾斜在这张水滴上几乎不改包围盒（实测宽 +1%、高 −1%），
+   96px 下等于没做；9° 才会把芽明显甩向一侧，轮廓才变。
+   【为什么是绕肩旋转而不是平移手臂】手臂是两段短 line、关节被身体盖住；
+   平移会把整条袖子挪进身体里（视觉上"手没了"），绕肩旋转才会把袖子露到肩上方。 */
+.pet--mirror-listening .pet__body-group {
+  transform: translateX(-6px) rotate(9deg);
+}
+
+/* 抬手的右手同样要在挥手时让位（同上：`.pet--waving` 的规则写在前面，同优先级会输）。 */
+.pet--mirror-listening:not(.pet--waving) .pet__arm--right {
+  transform-box: fill-box;
+  transform-origin: 0% 0%;
+  transform: rotate(-45deg);
+}
+
+/* 一起看：横向放大 10%、纵向压扁 7%——「趴下来一起看」。
+   【为什么不整体放大】画板顶部余量只有 5 个单位（芽尖 y≈7）：整体 scale(1.04)
+   实测把芽尖顶到距画板边缘 2 个设备像素，再高一点就裁切。
+   **宽高反向变化**（变宽 + 变扁）比单纯放大更容易被读到：长宽比从 0.75 变到 0.87，
+   是"形状变了"而不是"大小变了"，后者会被误认为缩放设置或呼吸。
+   scale 挂在父组 .pet__eyes 上，不碰负责眨眼的 .pet__eyes-open——两个动画抢 transform 会让眨眼失效。 */
+.pet--mirror-watching .pet__body-group {
+  transform: scaleX(1.1) scaleY(0.93);
+}
+
+.pet--mirror-watching .pet__eyes {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transform: scaleY(1.15);
+}
+
+/* ---- 打盹与惊醒 ----
+   打盹是「用户不在」的形态：闭眼、芽收拢、呼吸放慢到 6.4 秒一轮。
+   惊醒是事件反馈：只放大眼睛 + 芽弹一下，300ms 结束（PET_WAKE_MS）。 */
+.pet--dozing .pet__eyes-open {
+  animation: none;
+  transform: scaleY(0.1);
+}
+
+.pet--dozing .pet__sprout {
+  animation: none;
+}
+
+.pet--dozing .pet__sprout-mood {
+  transform: rotate(8deg) scaleY(0.78);
+}
+
+.pet--dozing .pet__svg {
+  animation-duration: var(--pet-doze-breath-ms, 6.4s);
+}
+
+.pet--waking .pet__eyes-open {
+  animation: none;
+  transform: scaleY(1.5);
+  transition: transform 120ms var(--ease-in-out);
+}
+
+.pet--waking .pet__sprout-mood {
+  transform: translateY(-3px) scaleY(1.1);
+  transition: transform 120ms var(--ease-in-out);
+}
+
+/* ---- 右键菜单 ----
+   自绘而非原生：菜单只有 5 项，窗口上方留白够放，且这样做 Go 侧一行都不用改。
+   【为什么是 fixed 而不是 absolute】`.pet` 有内边距与 overflow:hidden：
+   absolute 的 left/top 以 padding 盒为基准，会和光标差一个 padding 的距离；
+   fixed 直接对齐视口坐标，和 event.clientX/Y 同源。且 fixed 不受祖先 overflow 裁剪
+   （本页没有任何祖先带 transform，这个前提成立才成立）。
+   位置仍由 JS 夹在窗口内（见 onPetContextMenu）；宽度上限也跟着视口走
+   （模板内联 maxWidth），小缩放窗口下不会横向溢出。
+   高度随字体与说明行变化，不写死：maxHeight 由模板内联，超出时菜单内部滚动。 */
+.pet__menu {
+  position: fixed;
+  z-index: 10;
+  /* 宽度不在这里写：由模板内联成 PET_MENU_WIDTH，保持"一个数字一处定义"。
+     高度也不写：它随字体与"是否有第二行说明"变化，靠 JS 渲染后实测（见 onPetContextMenu）。 */
+  padding: var(--pet-menu-padding);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+  /* 菜单是点击区：--wails-draggable 从 .pet 继承下来，不排除就会拖窗口 */
+  --wails-draggable: no-drag;
+}
+
+.pet__menu-item {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  --wails-draggable: no-drag;
+}
+
+.pet__menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.pet__menu-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 说明行：字号更小、颜色更淡——它是补充，不该和菜单项标题抢注意力 */
+.pet__menu-hint {
+  color: var(--text-2);
+  font-size: var(--font-size-xs);
+}
+
+/* 菜单打开时气泡让位：两者都在同一块 240×380 里，叠加会互相遮住。
+   数据不动——只在菜单可见期间不渲染气泡，关掉菜单立刻恢复。 */
+.pet--menu .bubble {
+  display: none;
+}
+
 /* 尊重系统「减弱动态效果」。
    只停【常驻循环】，不停【事件触发的瞬时反馈】：
    前者是这类用户真正想关掉的东西（一个 24 小时在呼吸的小窗），
@@ -1958,6 +2881,13 @@ onUnmounted(() => {
   /* 情绪是静态状态，不是事件反馈；减弱动态时直接切换，不做过渡。 */
   .pet__sprout-mood {
     transition: none;
+  }
+
+  /* 镜像的姿态本身就是静态信息（前倾/托腮/注视），要保留；
+     停掉的只是"手在摆动"这个动画部分。 */
+  .pet--mirror-working .pet__arm--right,
+  .pet--mirror-working .pet__arm--left {
+    animation: none;
   }
 }
 
@@ -1979,6 +2909,18 @@ onUnmounted(() => {
   }
   95% {
     transform: scaleY(0.12);
+  }
+}
+
+/* 镜像 working：双手交替起落。4px 在 96px 高的宠物上约 2px——它只是"在动"的暗示，
+   真正的姿态信号由 body-group 的坐低承担。 */
+@keyframes pet-mirror-typing {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
   }
 }
 
@@ -2096,5 +3038,71 @@ onUnmounted(() => {
 .pet--dock-top .bubble,
 .pet--dock-bottom .bubble {
   display: none;
+}
+
+/* ==========================================================================
+   待机微动作的关键帧
+   ==========================================================================
+   幅度上限刻意压得很小（位移 ≤4px、缩放 ≤6%）：它们出现在用户余光里，
+   幅度一大就从"活的"变成"闹的"。八帧素材的 12fps 节奏与这些关键帧无关——
+   前者是图集，后者是 SVG 骨骼。 */
+
+/* 张望：两眼同步左→右→回中。只看眼睛，身体不动 */
+@keyframes pet-micro-look {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(3.5px);
+  }
+  55% {
+    transform: translateX(-3.5px);
+  }
+  80% {
+    transform: translateX(0);
+  }
+}
+
+/* 伸懒腰：整体纵向拉长，再轻微回收（回弹只有 1%，多了会像抽搐） */
+@keyframes pet-micro-stretch {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  35% {
+    transform: scale(1.03, 1.06);
+  }
+  70% {
+    transform: scale(0.995, 0.99);
+  }
+}
+
+/* 理芽：左叶抖两下。
+   关键帧以生长档位的基准角（--leaf-left-angle）为原点叠加，不能从 0deg 起——
+   否则 growth-0/2/3/4 下叶子会在动画开始瞬间从基准角跳到 0，再在结束时跳回去。 */
+@keyframes pet-micro-groom {
+  0%,
+  100% {
+    transform: rotate(calc(var(--leaf-left-angle, 0deg) + 0deg));
+  }
+  30% {
+    transform: rotate(calc(var(--leaf-left-angle, 0deg) + 10deg));
+  }
+  60% {
+    transform: rotate(calc(var(--leaf-left-angle, 0deg) - 4deg));
+  }
+}
+
+/* 打哈欠：嘴张开再合上。眼睛的闭合由 .pet--micro-yawn .pet__eyes-open 负责 */
+@keyframes pet-micro-yawn {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  40%,
+  65% {
+    transform: scale(1, 2.4);
+  }
 }
 </style>

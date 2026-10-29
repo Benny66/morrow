@@ -183,7 +183,7 @@ type Bubble struct {
 // Snapshot 是宠物窗口轮询的久坐快照。
 //
 // 【契约红线】这里不允许出现应用名、应用标识或窗口标题。具体应用名只在
-// 主窗「久坐」页通过独立查询可见。
+// 主窗「久坐」页通过独立查询可见。Activity 只含类别与档位，同样受这条红线约束。
 type Snapshot struct {
 	State                 State   `json:"state"`
 	Mood                  Mood    `json:"mood"`
@@ -198,6 +198,8 @@ type Snapshot struct {
 	BudgetRemaining       int     `json:"budget_remaining"`
 	Focus                 *Focus  `json:"focus,omitempty"`
 	Bubble                *Bubble `json:"bubble,omitempty"`
+	// Activity 是「用户此刻在做什么」，供宠物镜像体态；采样未成功时为 nil。
+	Activity *Activity `json:"activity,omitempty"`
 }
 
 // SitActionResult 是气泡动作/设置动作的可见回执。

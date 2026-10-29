@@ -130,6 +130,16 @@ func TestFrontendMirrorsMatchGoSourceOfTruth(t *testing.T) {
 			goPrefix: "Bubble",
 		},
 		{
+			// 活动档位（ticket: pet-activity-mirror）：Go 有 ActivityBusy/Recent/Away，
+			// 前端镜像 SitActivity.Busy/Recent/Away。漂移会让镜像姿态按未知档位
+			// 静默降级成"不演"——没有任何报错，只是宠物不再跟着你动。
+			name:     "活动档位枚举",
+			goPkg:    "internal/sit",
+			tsFile:   "frontend/src/lib/sit.ts",
+			tsObject: "SitActivity",
+			goPrefix: "Activity",
+		},
+		{
 			name:     "久坐动作 ID",
 			goPkg:    "internal/sit",
 			tsFile:   "frontend/src/lib/sit.ts",

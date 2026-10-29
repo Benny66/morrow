@@ -224,6 +224,19 @@ type Config struct {
 	PetScale float64 `json:"pet_scale"`
 	// PetPackID 选中的宠物包 ID（内置为 DefaultPetPackID）。
 	PetPackID string `json:"pet_pack_id"`
+	// PetShapeHighWater 芽形态档的持久化高水位（0..4），只增不减。
+	//
+	// 【为什么需要】形态由累计完成天数决定，但老版本按「今日完成率」显示；
+	// 升级当天如果只按长期档算，老用户会看到芽突然缩小。旧版配置首次调用 PetGrowth 时
+	// 用 max(长期档, 今日档) 播种一次，之后只靠长期档抬升——今日完成率只影响神态。
+	// 全新安装由 Default 直接置 seeded=true、高水位 0，不参考今日档。
+	// 这是配置里唯一由后端自行维护、不由设置页读写的宠物字段。
+	PetShapeHighWater int `json:"pet_shape_high_water"`
+	// PetShapeSeeded 是否已完成上述一次性播种。
+	//
+	// 旧版 config.json 缺该键时 Load 会显式置 false，首次 PetGrowth 播种并置 true；
+	// 全新安装的 Default 直接置 true（没有旧显示效果要迁移，高水位从 0 开始）。
+	PetShapeSeeded bool `json:"pet_shape_seeded"`
 
 	// path 是配置文件路径，不序列化（json:"-"）。
 	path string `json:"-"`
@@ -274,6 +287,9 @@ func Default() *Config {
 		PetVisible: true,
 		PetScale:   DefaultPetScale,
 		PetPackID:  DefaultPetPackID,
+		// 全新安装没有「旧版本显示效果」需要迁移：直接把播种标记置 true，
+		// 避免第一次 PetGrowth 把今天的完成率写进高水位。
+		PetShapeSeeded: true,
 	}
 }
 
@@ -316,6 +332,16 @@ func Load(appName string) (*Config, error) {
 	c := Default()
 	if err := json.Unmarshal(data, c); err != nil {
 		return nil, fmt.Errorf("解析配置失败: %w", err)
+	}
+	// 【一次性迁移的判据】Default() 会把 PetShapeSeeded 置 true（全新安装的默认），
+	// 而 Load 是「先 Default 再 Unmarshal」，旧配置缺这个键时也会继承 true。
+	// 故这里显式探测键是否存在：不存在说明是旧版本配置文件，需要首次播种。
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err == nil {
+		if _, ok := probe["pet_shape_seeded"]; !ok {
+			c.PetShapeSeeded = false
+			c.PetShapeHighWater = 0
+		}
 	}
 	c.path = path
 	return c, nil

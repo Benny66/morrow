@@ -354,3 +354,56 @@ func TestLoadOldConfigWithoutOnboardingField(t *testing.T) {
 		t.Fatal("旧配置缺 onboarding_completed 时应为 false")
 	}
 }
+
+// TestPetShapeSeedMigration 锁定「只有旧配置才播种」的判据。
+//
+// 全新安装的 Default 必须已播种（否则第一次 PetGrowth 会把今天完成率写进高水位）；
+// 旧配置缺 pet_shape_seeded 键时必须回到未播种，让 App 层做一次性迁移。
+func TestPetShapeSeedMigration(t *testing.T) {
+	isolateHome(t)
+
+	// 1. 全新安装：Load 创建默认文件，不需要迁移。
+	fresh, err := Load("freshpet")
+	if err != nil {
+		t.Fatalf("Load 全新配置失败: %v", err)
+	}
+	if !fresh.PetShapeSeeded {
+		t.Error("全新安装应已播种（PetShapeSeeded=true）")
+	}
+	if fresh.PetShapeHighWater != 0 {
+		t.Errorf("全新安装高水位 = %d，期望 0", fresh.PetShapeHighWater)
+	}
+
+	// 2. 旧版配置：缺 key，必须标记为待播种。
+	path, err := appdir.File("oldpet", "config.json")
+	if err != nil {
+		t.Fatalf("appdir.File 失败: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"light"}`), 0o644); err != nil {
+		t.Fatalf("写入旧配置失败: %v", err)
+	}
+	old, err := Load("oldpet")
+	if err != nil {
+		t.Fatalf("Load 旧配置失败: %v", err)
+	}
+	if old.PetShapeSeeded {
+		t.Error("旧配置缺少 pet_shape_seeded 时应待播种（false）")
+	}
+
+	// 3. 新配置已有 key：原样保留，不重复迁移。
+	path, err = appdir.File("newpet", "config.json")
+	if err != nil {
+		t.Fatalf("appdir.File 失败: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark","pet_shape_seeded":true,"pet_shape_high_water":3}`), 0o644); err != nil {
+		t.Fatalf("写入新配置失败: %v", err)
+	}
+	current, err := Load("newpet")
+	if err != nil {
+		t.Fatalf("Load 新配置失败: %v", err)
+	}
+	if !current.PetShapeSeeded || current.PetShapeHighWater != 3 {
+		t.Errorf("已有播种字段应原样保留，实际 seeded=%v high=%d",
+			current.PetShapeSeeded, current.PetShapeHighWater)
+	}
+}

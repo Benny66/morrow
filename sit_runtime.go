@@ -72,6 +72,14 @@ type sitRuntime struct {
 	// 专注展示用的类别缓存：只在应用切换或用户纠正类别后重新解析。
 	categoryAppID string
 	categoryCache sit.Category
+
+	// liveCategory 是最近一轮采样到的前台应用类别（采样未成功时为空）。
+	//
+	// 它与 categoryCache 的分工：categoryCache 按「应用标识」缓存派生结果、避免每 5 秒
+	// 读一次纠正表；liveCategory 是「这一刻用户属于哪一类」的对外答案，只由 tick 写入、
+	// 由 snapshot 读取。不能直接用 Focus.Category 代替它——专注会话要满 FocusMin（10 分钟）
+	// 才产出 Focus，而镜像需要「此刻」就在。
+	liveCategory sit.Category
 }
 
 func newSitRuntime(app *App) *sitRuntime {
@@ -193,6 +201,8 @@ func (r *sitRuntime) tick() {
 	r.handleEvents(res.Events, now, settings)
 	r.persist(now, res.ActiveSeconds)
 	appID, appCategory := r.sampleAppUsage(now, settings, active, supported, locked, idle)
+	// 对外答案只由这里写入：采样没有成功时 appCategory 为空，镜像随之失效。
+	r.liveCategory = appCategory
 	focusID, focusCategory := appID, appCategory
 	if idle >= sit.FocusSwitchGrace {
 		// 长时间没有输入时按切走处理；宽限由 tracker 累计，不在这里立即结束。
@@ -668,6 +678,7 @@ func (r *sitRuntime) resetInMemoryLocked() {
 	r.appReadMisses = 0
 	r.categoryAppID = ""
 	r.categoryCache = ""
+	r.liveCategory = ""
 	if r.app != nil && r.app.currentSitRuntimeSettings().ProfileEnabled {
 		r.profileStatus = sit.ProfileStatusNoData
 	} else {
@@ -811,6 +822,10 @@ func (r *sitRuntime) setProfileEnabled(enabled, deleteHistory bool) error {
 		r.tracker.ObserveFocus(sit.FocusInput{Now: now})
 		r.categoryAppID = ""
 		r.categoryCache = ""
+		// liveCategory 必须同时清掉：snapshot() 组装 Activity 时读的就是它，
+		// 而它只在 tick 里更新（最长 5 秒）。不清的话，用户点完「关闭」后那几秒
+		// 快照仍在报告"他刚才在写代码"——撤回了同意却还在输出结论，是越界。
+		r.liveCategory = ""
 		if deleteHistory {
 			if err := r.app.svc.ClearAppProfile(); err != nil {
 				return err
@@ -845,6 +860,16 @@ func (r *sitRuntime) snapshot() sit.Snapshot {
 	if !settings.Enabled {
 		base.State = sit.StateIdle
 		base.Mood = sit.MoodEnergetic
+	}
+	// 活动档位：只是既有空闲信号的第二个消费者，不新增采样。
+	//
+	// 用 snapshot 时刻的空闲时长而不是 tick 时缓存的值——宠物每 4 秒问一次，
+	// 这里读的是一个廉价的只读系统调用，新鲜度比一致性更重要（tick 是 5 秒）。
+	//
+	// 【为什么要同时判 ProfileEnabled】类别来自前台应用，属于画像同意的范围。
+	// 只判 Enabled 的话，用户关掉画像后、下一次 tick 之前的快照仍会带出旧类别。
+	if settings.Enabled && settings.ProfileEnabled {
+		base.Activity = sit.NewActivity(r.liveCategory, pause.GetIdleDuration())
 	}
 	if r.app == nil || r.app.svc == nil {
 		return base

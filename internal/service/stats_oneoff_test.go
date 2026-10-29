@@ -149,7 +149,7 @@ func TestOneOffCompletionDoesNotAffectStatsOrPet(t *testing.T) {
 		t.Errorf("一次性完成不应影响周期项进度/连续天数: %+v", stats.Reminders)
 	}
 
-	growth, err := svc.PetGrowth()
+	growth, _, err := svc.PetGrowth(0, false)
 	if err != nil {
 		t.Fatalf("读取宠物生长失败: %v", err)
 	}

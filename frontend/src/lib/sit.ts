@@ -36,6 +36,18 @@ export const SitCategory = {
   Other: 'other',
 } as const
 
+/**
+ * 活动档位（宠物镜像体态用）。
+ *
+ * 单一真相在 internal/sit/activity.go；判定是一个纯函数（空闲时长 → 档位），
+ * 前端**不重算档位**，只做「类别 + 档位 → 姿态名」的查表（见 lib/pet.ts）。
+ */
+export const SitActivity = {
+  Busy: 'busy',
+  Recent: 'recent',
+  Away: 'away',
+} as const
+
 /** 宠物气泡类型。 */
 export const BubbleKind = {
   Nudge: 'nudge',
@@ -84,6 +96,7 @@ export type SitStateValue = (typeof SitState)[keyof typeof SitState]
 export type SitMoodValue = (typeof SitMood)[keyof typeof SitMood]
 export type SitToneValue = (typeof SitTone)[keyof typeof SitTone]
 export type SitCategoryValue = (typeof SitCategory)[keyof typeof SitCategory]
+export type SitActivityValue = (typeof SitActivity)[keyof typeof SitActivity]
 export type BubbleKindValue = (typeof BubbleKind)[keyof typeof BubbleKind]
 export type SitActionValue = (typeof SitAction)[keyof typeof SitAction]
 export type ProfileStatusValue = (typeof ProfileStatus)[keyof typeof ProfileStatus]
@@ -181,6 +194,12 @@ export interface SitFocus {
   minutes: number
 }
 
+/** 用户此刻在做什么：只含类别与活动档位，不含应用名/标识/窗口标题。 */
+export interface SitActivityInfo {
+  category: SitCategoryValue
+  level: SitActivityValue
+}
+
 /** 宠物待展示气泡。 */
 export interface SitBubble {
   id: string
@@ -205,6 +224,8 @@ export interface SitSnapshot {
   budget_remaining: number
   focus?: SitFocus
   bubble?: SitBubble
+  /** 采样未成功时为空（画像关闭、非工作时段、锁屏、长空闲、前台是本应用）。 */
+  activity?: SitActivityInfo
 }
 
 /** 气泡动作/设置动作的可见回执。 */
