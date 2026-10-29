@@ -34,6 +34,7 @@
 | `internal/dialog/` | 原生对话框封装 |
 | `internal/reveal/` | 在系统文件管理器中打开目录（跨平台） |
 | `internal/tray/` | 系统托盘（macOS 为 no-op，见其包注释） |
+| `internal/update/` | GitHub Releases 版本检查：API 优先、`releases/latest` 302 回退；M1 只检查与提示，见 ADR 0013 |
 | `internal/crash/` | panic 落盘（供业务显式包裹长驻 goroutine） |
 | `internal/apperr/` | **契约**：错误协议（code/message + `Format`） |
 | `internal/page/` | **契约**：分页协议（`Request` / `Result[T]`） |
