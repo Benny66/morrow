@@ -20,7 +20,7 @@ Morrow reminds you to drink, stand, move and look away — 小满, a small water
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-2f6f4e?style=flat-square" alt="Platforms">
   <img src="https://img.shields.io/badge/Wails-v3-DF2B2B?style=flat-square" alt="Wails v3">
   <img src="https://img.shields.io/badge/Vue-3-42b883?style=flat-square" alt="Vue 3">
-  <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square" alt="Go 1.25+">
+  <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square" alt="Go 1.26+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2f6f4e?style=flat-square" alt="MIT License"></a>
 </p>
 
@@ -207,9 +207,9 @@ AI 只负责生成一次，之后完全本地可控：模板副本与 AI 计划�
 
 | 依赖 / Dependency | 版本 / Version | 说明 / Notes |
 |---|---|---|
-| Go | ≥ 1.25 | `go version` 确认 |
+| Go | ≥ 1.26 | `go version` 确认 |
 | Node | ≥ 20 | `node --version` 确认 |
-| Wails CLI | v3，与 `go.mod` 对齐（当前 `v3.0.0-beta.23`） | `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23` |
+| Wails CLI | v3，与 `go.mod` 对齐（当前 `v3.0.0`） | `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0` |
 | 平台依赖 | — | Windows 需 WebView2；Linux 需 GTK4 + WebKitGTK 6.0 |
 
 ### 运行 / Run
@@ -320,7 +320,7 @@ bash scripts/dev-signing-cert.sh
 
 ## 平台支持与已知限制 / Platform Support
 
-- 主要交付平台是 macOS / Windows。Linux 可编译，但 WebKitGTK 版本耦合，未纳入 CI。
+- 主要交付平台是 macOS / Windows。Linux 可编译，CI 有编译腿（GTK4 + WebKitGTK 6.0），但未打包、未做运行验收。
 - 智能免打扰在 macOS 上完整实现；Windows 上专注与日历两路信号静默缺席，不报错。
 - 应用画像在 macOS/Windows 读取前台应用身份；Windows 的 Win+L 锁屏识别依赖 `OpenInputDesktop`，在企业策略或受限终端可能不可用，不可用时只保留空闲/离开模式，不会伪造锁屏抵扣。
 - 自然停顿顺延依赖系统空闲时长读取；目前 macOS / Windows 支持，Linux 静默关闭并在设置页标注。

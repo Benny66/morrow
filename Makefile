@@ -36,7 +36,7 @@ dev: ## 启动开发态（wails3 dev，含前端热更新）
 # 调用任意绑定方法的本机端口，绝不能是默认行为。唯一受认可的启用方式就是下面
 # 这个环境变量——wails3 见到 WAILS_MCP=1 才追加 mcp 标签。
 #
-# 【这条通道的边界，v3 beta.23 实测】WAILS_MCP=1 只在 `wails3 build` 与 `wails3 dev`
+# 【这条通道的边界，v3.0.0 实测】WAILS_MCP=1 只在 `wails3 build` 与 `wails3 dev`
 # 上生效——它们分别经由 internal/commands/task_wrapper.go 的 Build() 与 dev.go 读
 # envTags() 并导出 EXTRA_TAGS。`wails3 package` **不读**（Package() 只是
 # wrapTask("package", …)，不调用 envTags()）。后果：本仓 darwin 的交付路径走 package，

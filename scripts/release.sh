@@ -85,9 +85,9 @@ fi
 echo ""
 echo "--- Linux/amd64 ---"
 if [ "$HOST" = "Linux" ]; then
-  # webkit2_41：wails 默认按 webkit2gtk-4.0 链接，Ubuntu 24.04+ / Debian 13+ 只有 4.1
-  # （详见 scripts/package.sh 的同名说明）。Linux 不在 CI 的编译矩阵内。
-  if bash scripts/build.sh GOOS=linux ARCH=amd64 -tags webkit2_41; then
+  # v3.0.0 默认 GTK4 + WebKitGTK 6.0；不再传 webkit2_41（旧 GTK3 栈的标签，
+  # 需要时用 -tags gtk3）。Linux 只进 CI 编译腿、不进发布矩阵。
+  if bash scripts/build.sh GOOS=linux ARCH=amd64; then
     cp "build/bin/${APP_NAME}" "dist/${APP_NAME}-${VERSION}-linux-amd64"
     lin_ok=1
   fi

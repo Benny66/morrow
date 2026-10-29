@@ -8,7 +8,7 @@
 
 ## 技术栈与结构
 
-- Wails v2（Go 后端 + Vue3 前端），锁定版本见 `go.mod` 与 `frontend/package.json`。
+- Wails v3（Go 后端 + Vue3 前端），锁定版本见 `go.mod` 与 `frontend/package.json`。
 - Go 侧根目录为 `main.go`/`app.go`，业务分层在 `internal/` 内；Vue 侧在 `frontend/`。
 - 代码导航见 `docs/map.md`——先读它再动手，禁止 `find` 全库盲扫。
 

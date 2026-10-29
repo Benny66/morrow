@@ -108,7 +108,7 @@ func alertGeometry(app *application.App) (x, y, width, height int) {
 //
 // 尺寸由调用方传入（见 alertGeometry）：建窗时就给定正确尺寸，避免"先小后大"跳一下。
 //
-// 【字段选择说明】（对着 wails v3.0.0-beta.23 的 WebviewWindowOptions 逐条核对，
+// 【字段选择说明】（对着 wails v3.0.0 的 WebviewWindowOptions 逐条核对，
 // 与 petWindowOptions 的取舍保持一致，改动时请两边一起看）：
 //   - Frameless：无边框。全屏窗不需要标题栏，也不需要 macOS 交通灯。
 //   - AlwaysOnTop：必须浮在所有窗口之上——它存在的唯一目的就是抢注意力。
